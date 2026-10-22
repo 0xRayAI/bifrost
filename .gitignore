@@ -4,3 +4,5 @@ node_modules/
 .push-env
 .env
 .env.*
+__pycache__/
+*.pyc
