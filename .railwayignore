@@ -1,0 +1,4 @@
+.railway-secrets
+.push-env
+node_modules/
+*.log

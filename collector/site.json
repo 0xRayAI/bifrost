@@ -1,0 +1,3 @@
+{"public": true, "name": "Bifrost", "title": "Bifrost live fleet", "node": "Bifrost",
+ "hosts": {"dev": "burst-live", "labtest": "burst-live", "prod": "burst-live"},
+ "services": [{"name": "burst-live", "health": "https://bifrost.0xray.dev/healthz"}]}

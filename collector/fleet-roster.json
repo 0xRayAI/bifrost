@@ -1,0 +1,12 @@
+{
+  "seats": ["blinky", "critic", "forge", "herald", "magnet", "nibbler", "sound", "arch1"],
+  "board": ["blinky", "critic", "forge"],
+  "outside": ["arch1"],
+  "parked": ["herald", "magnet", "nibbler", "sound"],
+  "roles": {
+    "blinky": "chief of staff",
+    "critic": "reviewer",
+    "forge": "eng primary",
+    "arch1": "outside party"
+  }
+}

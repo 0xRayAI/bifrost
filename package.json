@@ -1,0 +1,15 @@
+{
+  "name": "live-board",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bifrost live mesh: public or password-gated page with push-only feed ingest",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/dockerfile-copy.test.mjs tests/collector-build.test.mjs tests/health.test.mjs tests/health-ci.test.mjs"
+  },
+  "engines": {
+    "node": ">=24.22.1"
+  }
+}

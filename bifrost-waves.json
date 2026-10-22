@@ -1,0 +1,74 @@
+{
+  "window": "0 9 * * 1",
+  "waves": [
+    {
+      "id": "W1",
+      "rank": 1,
+      "title": "re-wear close",
+      "cards": [
+        {
+          "key": "wave:W1",
+          "title": "re-wear close",
+          "kind": "wave"
+        }
+      ]
+    },
+    {
+      "id": "W2",
+      "rank": 2,
+      "title": "#389 ponder/reflections",
+      "cards": [
+        {
+          "key": "0xRayAI/xray#389",
+          "repo": "0xRayAI/xray",
+          "number": 389,
+          "title": "#389 ponder/reflections",
+          "url": "https://github.com/0xRayAI/xray/issues/389",
+          "kind": "issue"
+        }
+      ]
+    },
+    {
+      "id": "W3",
+      "rank": 3,
+      "title": "#386 boot-read hook",
+      "cards": [
+        {
+          "key": "0xRayAI/xray#386",
+          "repo": "0xRayAI/xray",
+          "number": 386,
+          "title": "#386 boot-read hook",
+          "url": "https://github.com/0xRayAI/xray/issues/386",
+          "kind": "issue"
+        }
+      ]
+    },
+    {
+      "id": "W4",
+      "rank": 4,
+      "title": "the 7 pre-existing npm test failures",
+      "cards": [
+        {
+          "key": "0xRayAI/xray#397",
+          "repo": "0xRayAI/xray",
+          "number": 397,
+          "title": "the 7 pre-existing npm test failures",
+          "url": "https://github.com/0xRayAI/xray/issues/397",
+          "kind": "issue"
+        }
+      ]
+    },
+    {
+      "id": "W5",
+      "rank": 5,
+      "title": "the synthesize and syncopate lexicon entry",
+      "cards": [
+        {
+          "key": "wave:W5",
+          "title": "the synthesize and syncopate lexicon entry",
+          "kind": "wave"
+        }
+      ]
+    }
+  ]
+}

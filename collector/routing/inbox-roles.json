@@ -1,0 +1,242 @@
+{
+  "keep_days": 7,
+  "stall_hours": 6,
+  "watcher_gap_hours": 6,
+  "mirror_seat": "forge",
+  "develop_branches": [
+    "develop"
+  ],
+  "watcher_seats": [],
+  "routing": {
+    "blinky": {
+      "login": null,
+      "aliases": [
+        "Blinky",
+        "blinky"
+      ]
+    },
+    "critic": {
+      "login": "critic0x[bot]",
+      "aliases": [
+        "Critic",
+        "critic"
+      ]
+    },
+    "forge": {
+      "login": "forge0x1[bot]",
+      "aliases": [
+        "Forge",
+        "forge"
+      ]
+    },
+    "herald": {
+      "login": "herald0x[bot]",
+      "aliases": [
+        "Herald",
+        "herald"
+      ]
+    },
+    "magnet": {
+      "login": null,
+      "aliases": [
+        "Magnet",
+        "magnet"
+      ]
+    },
+    "nibbler": {
+      "login": null,
+      "aliases": [
+        "Nibbler",
+        "nibbler"
+      ]
+    },
+    "sound": {
+      "login": null,
+      "aliases": [
+        "Sound",
+        "sound"
+      ]
+    },
+    "arch1": {
+      "login": "arch10x[bot]",
+      "aliases": [],
+      "outside": true
+    }
+  },
+  "_note_routing": "The routing map: each seat once, with its real GitHub login (App seats as their bot login, people by handle; null = no GitHub login, reached in the inner loop only) and its nicknames as aliases. burst-live resolves every login against GitHub at startup and on each audit, refuses an unresolved entry and flags it on the board; GET /routing serves it read-only. Look a login up there before you @-mention anyone, never from memory. Logins verified against the GitHub users API on 2026-10-14: forge0x1[bot], critic0x[bot], herald0x[bot], arch10x[bot] exist; blinky has no App login found (null).",
+  "seats": {
+    "reviewer": {
+      "off": true,
+      "_note": "pr_heads sends critic + blinky one line per new PR / head"
+    },
+    "builder": {
+      "seat": "forge",
+      "ready": true
+    },
+    "tester": {
+      "seat": "forge",
+      "merge_bases": [
+        "develop"
+      ]
+    },
+    "operator": {
+      "seat": "forge",
+      "kinds": [
+        "deploy",
+        "deploy_fail",
+        "deploy_pending",
+        "deploy_hold"
+      ],
+      "labels": [
+        "lab"
+      ],
+      "needles": [
+        "railway",
+        "lab",
+        "labtest",
+        "cloud agent",
+        "cloud agents",
+        "operator",
+        "ops-app"
+      ]
+    },
+    "coord": {
+      "seat": "blinky",
+      "stalls": false,
+      "watcher_gaps": false,
+      "labels": [
+        "needs-decision",
+        "lead"
+      ],
+      "needles": [
+        "lead",
+        "needs-decision"
+      ]
+    }
+  },
+  "extra_seats": {
+    "arch1": {
+      "needles": [
+        "@arch10x"
+      ],
+      "reason": "explicit @arch10x ask for Arch1 (outside the fleet)"
+    },
+    "forge": {
+      "kinds": [
+        "ci_fail",
+        "deploy_fail",
+        "op_deploy"
+      ],
+      "merge_bases": [
+        "main",
+        "bifrost/main"
+      ],
+      "needles": [
+        "@forge",
+        "@forge0x1",
+        "@mill",
+        "merge ask",
+        "deploy ask",
+        "run gate b",
+        "implement ask",
+        "rebase ask",
+        "dev ask",
+        "mill wave"
+      ],
+      "reason": "CI / deploy failure, merge / deploy / Gate B run ask, implement / rebase / dev ask, or merge into main or bifrost/main; terminal railway deploy (op_deploy). Forge launches the cloud agent."
+    },
+    "critic": {
+      "kinds": [
+        "review_requested"
+      ],
+      "needles": [
+        "@critic",
+        "@critic0x",
+        "light ask",
+        "strict ask",
+        "re-light"
+      ],
+      "reason": "review request or Light / Strict / re-Light ask"
+    },
+    "blinky": {
+      "needles": [
+        "@blinky"
+      ],
+      "reason": "mention for blinky (wave plan, burn, Lane H, onboarding)"
+    },
+    "herald": {
+      "needles": [
+        "@herald",
+        "@herald0x"
+      ],
+      "reason": "Dist ask for herald"
+    },
+    "nibbler": {
+      "needles": [
+        "@nibbler"
+      ],
+      "reason": "ask for nibbler"
+    },
+    "sound": {
+      "needles": [
+        "@sound"
+      ],
+      "reason": "ask for sound"
+    },
+    "magnet": {
+      "needles": [
+        "@magnet"
+      ],
+      "reason": "hangar / listing ask for magnet"
+    }
+  },
+  "pr_heads": {
+    "kinds": [
+      "pr_open",
+      "pr_update",
+      "pr_commit",
+      "pr_force_push"
+    ],
+    "seats": {
+      "critic": "review ask: new PR or new head",
+      "blinky": "heads-up: new PR or new head"
+    }
+  },
+  "_note_pr_heads": "every PR open / new head on a watched repo, mention or not; one line per seat per repo#number@sha (inbox_pass.py)",
+  "handoffs": {
+    "reviewer": "critic",
+    "merger": "forge",
+    "kinds": {
+      "ready": { "to": "reviewer", "owes": "author" },
+      "critic_fail": { "to": "author", "owes": "reviewer" },
+      "merge": { "to": "merger", "owes": "author" },
+      "live_pass": { "to": "reviewer", "owes": "merger" },
+      "ci_fail": { "to": "author", "owes": "merger" }
+    }
+  },
+  "_note_handoffs": "Who the packet goes to, and who owes sending it, for live-inbox --handoff. reviewer and merger name seats in this file. author is the PR author's seat. The server never posts the packet. A room post does not clear a missed handoff.",
+  "_note_extra_seats": "extra_seats are routed by feed/inbox_pass.py (kinds / merge_bases / needles); every key is one of our 8 seats (feed/fleet-roster.json)",
+  "_note_builder_cloud": "builder / builder-cloud are kit plumbing in app/server.mjs (installation-token auth, mirror); no route writes to them",
+  "fallback": {
+    "seat": "blinky"
+  },
+  "_note_fallback": "Actionable events whose lines all go to a seat outside our 8 (unknown, sample, unkeyed) also go to blinky (CoS). Lines to seats outside our 8 are dropped. Pulses never route. Arch1 is outside the fleet and reached only by an explicit @arch10x mention; his lines are never copied to blinky.",
+  "comment_watch": {
+    "kinds": [
+      "pr_comment",
+      "review_comment",
+      "issue_comment"
+    ],
+    "author_kinds": [
+      "pr_comment",
+      "review_comment",
+      "issue_comment"
+    ],
+    "author_reason": "comment on your PR",
+    "seats": {
+      "blinky": "comment watch (CoS)"
+    }
+  },
+  "_note_comment_watch": "Every PR/issue comment (incl. merged PRs) routes to blinky, and PR/issue comments also to the PR or issue author's seat (aliases on the author node), mention or not. @-mentions come from the collector's mentions[] (handles only, never bodies).",
+  "_note_seats": "seats: the kit's role rules (reviewer / builder / tester / operator / coord, read by routing/inbox.py), each mapped to one of our 8 by \"seat\" (or \"off\"); inbox_pass.py rewrites every line to that seat. Kit defaults stay in inbox.py."
+}
