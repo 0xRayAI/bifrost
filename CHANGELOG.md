@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The board header says Refreshed for the page pull. The light says Last activity for the newest GitHub event.
+
 ## 0.1.0 — 2026-10-22
 
 - First tree. The live app is the repo root, copied from 0xRayAI/xray main `b49fe24cdfbc85126af3337a7e4f129c4e1a9d2f` (`house/live/app`). That path matches this commit on main.

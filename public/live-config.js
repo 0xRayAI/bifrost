@@ -6,7 +6,7 @@
   var FEED = (window.LIVE_FEED_URL || 'live-events.json');
   L.SOURCES.splice(0, L.SOURCES.length, { name: 'feed', api: true, url: FEED }, { name: 'feed', url: FEED });
   // Poll every 10 s: the pusher uploads right after each feed write, and an unchanged feed is a 304 with an empty body
-  // (If-None-Match against this server's ETag), so the page's 'Updated' age stays under ~75 s.
+  // (If-None-Match against this server's ETag), so the page's 'Refreshed' age stays under ~75 s.
   L.POLL_MS = 10000;
   // Delta polls: the full feed once (first load, or after the server reports a reset), then ?since=<cursor> returns
   // only events new or changed since then plus the header fields (304 when nothing changed). applyFeed already
@@ -204,9 +204,9 @@
     if (cardsBehind && cardAge >= 3600000) return { tone: 'red', line: 'Cards last changed ' + freshClock(cardAge) + ' ago' };
     if (dataAge >= 3 * 3600000) return { tone: 'red', line: 'No new GitHub activity in ' + freshClock(dataAge) };
     if (cardsBehind) return { tone: 'amber', line: 'Cards last changed ' + freshClock(cardAge) + ' ago' };
-    if (dataAge < 60000) return { tone: 'green', line: 'Updated just now' };
-    if (dataAge < 30 * 60000) return { tone: 'green', line: 'Updated ' + freshClock(dataAge) + ' ago' };
-    return { tone: 'amber', line: 'Updated ' + freshClock(dataAge) + ' ago' };
+    if (dataAge < 60000) return { tone: 'green', line: 'Last activity just now' };
+    if (dataAge < 30 * 60000) return { tone: 'green', line: 'Last activity ' + freshClock(dataAge) + ' ago' };
+    return { tone: 'amber', line: 'Last activity ' + freshClock(dataAge) + ' ago' };
   };
   L.cardBucket = function (c) {
     if (!c) return 'waiting';

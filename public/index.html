@@ -1817,7 +1817,7 @@ footer a { color: var(--foot); }
     var bots = seatNames.filter(function (k) { return seatState(k, hot) !== 'idle'; }).length;
     window.LIVE_HEADER_ACTIVE = [bots, seatNames.length];
     var total = window.LIVE_FEED_TOTAL != null ? window.LIVE_FEED_TOTAL : state.events.length;
-    var st = state.generatedAt ? 'Updated <b title="' + L.fmtCt(state.generatedAt) + '">' + L.ago(now - state.generatedAt) + '</b>' : 'Waiting for feed';
+    var st = state.generatedAt ? 'Refreshed <b title="' + L.fmtCt(state.generatedAt) + '">' + L.ago(now - state.generatedAt) + '</b>' : 'Waiting for feed';
     st += ' · ' + Number(total).toLocaleString('en-US') + ' events · ' + bots + ' of ' + seatNames.length + ' seats active';
     paintFresh(now);
     if (fetchError) st += ' · <span class="err">' + fetchError + '</span>';
