@@ -400,12 +400,12 @@ header h1 span { color: var(--dim); font-size: 13px; font-weight: 400; letter-sp
 .status .err { color: var(--danger); }
 .note { color: var(--dim); font-size: 12px; margin: 2px 0 10px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
-#seatGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 6px; }
-.seat { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.seat-copy { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
+#seatGrid { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.seat { display: inline-flex; gap: 8px; align-items: center; width: max-content; max-width: 16rem; flex: none; min-width: 0; }
+button.seat { background: transparent; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .seat.idle { opacity: .45; }
 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--dot-off); flex: none; }
-.seat .nm { min-width: 0; font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--nm)); }
+.seat .nm { min-width: 0; max-width: 8rem; flex: 0 1 auto; font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--nm)); }
 /* The working label's sheen, on the roster name: dim seat color with a full-color band sweeping left to right while .live (seatView.lit). 1.2s is the old canvas travel. */
 .seat.live:not(.silent) .nm {
   background-image: linear-gradient(90deg, rgba(var(--nm), .45) 0%, rgba(var(--nm), .45) 38%, rgb(var(--nm)) 50%, rgba(var(--nm), .45) 62%, rgba(var(--nm), .45) 100%);
@@ -420,7 +420,7 @@ header h1 span { color: var(--dim); font-size: 13px; font-weight: 400; letter-sp
 @media (prefers-reduced-motion: reduce) {
   .seat.live:not(.silent) .nm { animation: none; background-image: none; color: rgb(var(--nm)); }
 }
-.seat .role { color: var(--dim); font-size: 11px; font-weight: 450; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seat .role { color: var(--dim); font-size: 11px; font-weight: 450; white-space: nowrap; }
 .seat.live .role { color: var(--text); }
 .lens-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dim); align-items: center; }
 #head { color: var(--teal); font-weight: 700; font-size: 15px; }
@@ -596,7 +596,6 @@ button:hover { border-color: var(--control-hover); }
 footer { color: var(--dim); font-size: 12px; }
 footer a { color: var(--foot); }
 @media (max-width: 720px) {
-  #seatGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fleet { white-space: normal; }
   .wave-stats { grid-template-columns: repeat(3, 1fr); }
   #log li { grid-template-columns: 12ch 1fr; }
@@ -784,7 +783,8 @@ footer a { color: var(--foot); }
   }
   paintSeatColors();
 
-  // seats strip: name plus role. The dot is the status; the chip does not print ACTIVE / WORKING / IDLE.
+  // seats strip: the name sits on the chip. A click opens the role. The dot is the status.
+  // The chip does not print ACTIVE / WORKING / IDLE.
   // The list is the feed roster when the server sends one. A missing roster keeps the strip already installed.
   var seatEls = {};
   function seatColor(name) {
@@ -810,16 +810,32 @@ footer a { color: var(--foot); }
       L.AGENTS.push(a);
       L.SEAT_NAMES.push(a[0]);
       if (!L.LABEL[a[0]]) L.LABEL[a[0]] = a[0];
-      var el = document.createElement('div');
+      var el = document.createElement('button');
+      el.type = 'button';
       el.className = 'seat';
+      el.setAttribute('aria-expanded', 'false');
       var label = String(L.LABEL[a[0]] || a[0]);
-      el.innerHTML = '<span class="dot"></span><span class="seat-copy"><span class="nm"></span><span class="role"></span></span>';
+      var roleText = String(a[1] || '');
+      el.innerHTML = '<span class="dot"></span><span class="nm"></span>';
       var nm = el.querySelector('.nm');
       nm.textContent = label.toUpperCase();
       nm.title = label;
       var ink = seatColor(a[0]);
       nm.style.setProperty('--nm', ink[0] + ', ' + ink[1] + ', ' + ink[2]);
-      el.querySelector('.role').textContent = String(a[1] || '');
+      el.addEventListener('click', function () {
+        var open = el.getAttribute('aria-expanded') === 'true';
+        var role = el.querySelector('.role');
+        if (open) {
+          if (role) role.remove();
+          el.setAttribute('aria-expanded', 'false');
+          return;
+        }
+        role = document.createElement('span');
+        role.className = 'role';
+        role.textContent = roleText;
+        el.appendChild(role);
+        el.setAttribute('aria-expanded', 'true');
+      });
       grid.appendChild(el);
       seatEls[a[0]] = { el: el, dot: el.querySelector('.dot') };
     });
