@@ -9,7 +9,7 @@ import { defineRailway, project, service } from "railway/iac";
 
 export default defineRailway(() => {
   const live = service("live-mesh", {
-    start: "node server.mjs",
+    start: "/app/docker-entrypoint.sh",
     healthcheck: "/healthz",
     replicas: 1,
   });
