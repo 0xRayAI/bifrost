@@ -7,7 +7,7 @@
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test tests/dockerfile-copy.test.mjs tests/collector-build.test.mjs tests/health.test.mjs tests/health-ci.test.mjs"
+    "test": "node --test tests/dockerfile-copy.test.mjs tests/collector-build.test.mjs tests/health.test.mjs tests/health-ci.test.mjs tests/overlay.test.mjs"
   },
   "engines": {
     "node": ">=24.22.1"
