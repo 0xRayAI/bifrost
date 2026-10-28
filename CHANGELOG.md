@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A missed /healthz makes the supervisor exit 1 so ON_FAILURE replaces the one replica. The replica pid is not SIGKILL'd. The collector is not signaled for that miss.
 - The board header says Refreshed for the page pull. The light says Last activity for the newest GitHub event.
 
 ## 0.1.0 — 2026-10-22
