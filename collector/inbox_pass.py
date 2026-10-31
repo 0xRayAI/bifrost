@@ -8,12 +8,16 @@ Run by the pusher every cycle (no secrets on argv; the ingest secret comes on st
   sent OUT                   -> after a 200, remember those ids
 The local spool ($MESH_RUN/feed/inbox-spool/<seat>.jsonl) is a ring buffer (last 300 lines a seat); the Railway
 server is the source of truth (GET /inbox/<seat>).
-First pass seeds silently (history is never delivered). Inbox lines carry ids, kinds, repo#number, sha, title (event
-label, already in the public feed), url and a short reason; never bodies, prompt text or secrets.
+The first pass marks every id seen and delivers only events inside the seed grace (SEED_GRACE_S). Older history is
+never delivered. A later pass delivers an id once, and skips an id first seen after ROUTE_MAX_AGE_S. Inbox lines carry
+ids, kinds, repo#number, sha, title (event label, already in the public feed), url and a short reason; never bodies,
+prompt text or secrets.
 """
 import json, os, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import ci_inbox
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "routing"))
@@ -163,6 +167,36 @@ def watched_by_seat(seat, event):
     return ("*" in repos or str(event.get("repo") or "") in repos) and ("*" in kinds or inbox._kind(event) in kinds)
 
 
+def packet_next_seat(event, roles):
+    """Packet next owner, when it names one of our seats. The opener is not a tip."""
+    pk = event.get("packet")
+    if not isinstance(pk, dict):
+        return None
+    raw = str(pk.get("next owner") or "").strip()
+    if not raw:
+        return None
+    known = set(our_seats()) | {str(s) for s in (roles.get("routing") or {})}
+    names = [raw]
+    first = raw.split()[0]
+    if first and first != raw:
+        names.append(first)
+    for name in names:
+        hit = alias_seat(name, roles)
+        if not hit:
+            want = name.casefold().removesuffix("[bot]")
+            for key, seat in aliases_of(roles).items():
+                if str(key).casefold() == want:
+                    hit = seat
+                    break
+        if not hit:
+            mapped = role_seat(name.casefold(), roles)
+            if mapped and mapped != name.casefold() and mapped in known:
+                hit = mapped
+        if hit in known:
+            return hit
+    return None
+
+
 def _direct_all(event, roles):
     """PR #5 routes plus the extra Chat Bot seats (roles.extra_seats: kinds / merge_bases / needles)."""
     kind = inbox._kind(event)
@@ -209,6 +243,22 @@ def _direct_all(event, roles):
             line = inbox._line(event, seat, reason + merged)
             if line:
                 out.append(line)
+    if kind == "review" and event.get("number") is not None:
+        author = login_seat(event.get("pr_author"), roles)
+        if author:
+            line = inbox._line(event, author, "review on your PR")
+            if line:
+                out.append(line)
+    if kind in ("merged", "next_parent") and event.get("door_seat") and event.get("parent") and event.get("next_issue"):
+        raw_id = str(event.get("id") or "")
+        line_id = raw_id if raw_id.endswith(":door") else f"{raw_id}:door"
+        line = inbox._line(event, str(event.get("door_seat")), "next on parent",
+                           line_id=line_id, line_type="packet")
+        if line:
+            line["kind"] = "ready"
+            line["title"] = f"next on #{event.get('parent')}: #{event.get('next_issue')}"[:120]
+            line["number"] = int(event.get("next_issue"))
+            out.append(line)
     if kind in ("merged", "pr_close") and event.get("number") is not None:
         author = author_seat(event, roles)
         if author:
@@ -216,6 +266,11 @@ def _direct_all(event, roles):
             line = inbox._line(event, author, why, line_id=f"{event.get('id')}:info", line_type="info")
             if line:
                 out.append(line)
+    nxt = packet_next_seat(event, roles)
+    if nxt and nxt != actor_seat(event, roles):
+        line = inbox._line(event, nxt, "packet next owner")
+        if line:
+            out.append(line)
     ours = our_seats()
     if ours:   # a line to a seat outside ours (unknown, sample, unkeyed) is read by nobody: drop it, fall back below
         out = [l for l in out if l.get("seat") in ours]
@@ -395,7 +450,10 @@ def cmd_pass(now=None):
                           "t_ct": datetime.fromtimestamp(now, timezone.utc).isoformat(), "edited_from": k})
     ments = {k: v for k, v in ments.items() if k in seen or k in ev}
     new = new + edits + changed
-    if not first and new:
+    # `new` is already inside the floor: seed grace on the first pass, route max age after that.
+    # History was marked seen above and is not in this list. Deliver the grace window on the seed pass too,
+    # or a fresh @arch10x comment is swallowed when the route volume is empty (#620).
+    if new:
         acts = []
         if ACTIVITY.is_file():
             for raw in ACTIVITY.read_text().splitlines()[-2000:]:
@@ -407,12 +465,66 @@ def cmd_pass(now=None):
         written = inbox.deliver(adapt(new), adapt([ev[k] for k in ids]), directory=INBOX, roles=roles,
                                 now=datetime.fromtimestamp(now, timezone.utc), activity=acts)
         lines = sum(written.values())
+        cached = adapt([ev[k] for k in ids])
+
+        def seat_named(name):
+            hit = alias_seat(name, roles)
+            if hit:
+                return hit
+            want = name.casefold().removesuffix("[bot]")
+            for key, seat in aliases_of(roles).items():
+                if str(key).casefold() == want and seat:
+                    return seat
+            return ""
+
+        def ci_seat(repo, number):
+            rows = []
+            for event in cached:
+                try:
+                    got = int(event.get("number"))
+                except (TypeError, ValueError):
+                    continue
+                if str(event.get("repo") or "").lower() != repo or got != number:
+                    continue
+                if str(event.get("kind") or "") not in ("pr_open", "issue_open", "pr_update", "pr_commit"):
+                    continue
+                rows.append(event)
+            if not rows:
+                return ""
+            for event in sorted(rows, key=lambda item: str(item.get("t_ct") or ""), reverse=True):
+                packet = event.get("packet") if isinstance(event.get("packet"), dict) else {}
+                raw = str(packet.get("next owner") or "").strip()
+                for name in ([raw, raw.split()[0]] if raw else []):
+                    hit = seat_named(name)
+                    if hit:
+                        return hit
+            newest = max(rows, key=lambda item: str(item.get("t_ct") or ""))
+            for key in ("from", "actor"):
+                hit = seat_named(str(newest.get(key) or ""))
+                if hit:
+                    return hit
+            return ""
+
+        extra = ci_inbox.ci_fail_lines(cached, adapt(new), ci_seat)
+        by_seat = {}
+        for line in extra:
+            by_seat.setdefault(line["seat"], []).append(line)
+        for seat, group in by_seat.items():
+            path = INBOX / f"{seat}.jsonl"
+            known = inbox._known_ids(path)
+            fresh = []
+            for line in group:
+                if line["id"] in known or set(line) - set(inbox._FIELDS):
+                    continue
+                known.add(line["id"])
+                fresh.append(line)
+            lines += inbox._append(path, fresh)
         inbox.maybe_board(len(new), log=lambda m: print(m, file=sys.stderr))
     sig = {k: v for k, v in sig.items() if k in seen or k in ev}
     _save(STATE, {"seeded": True, "seeded_at": seeded_at, "seen": seen, "sent": st.get("sent") or [], "ments": ments, "sig": sig})
     ring()
     _save(CACHE, c)
-    print(f"{0 if first else len(new)} {lines}")
+    print(f"{len(new)} {lines}")
 
 
 def ring():

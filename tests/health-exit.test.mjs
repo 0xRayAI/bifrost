@@ -36,6 +36,7 @@ function runSupervisor(port, child, extra = {}) {
       HEALTH_CHILD: child,
       HEALTH_STDIO: 'ignore',
       HEALTH_EXIT_MISS_MS: '400',
+      HEALTH_EXIT_BOOT_MS: '400',
       HEALTH_EXIT_EVERY_MS: '40',
       HEALTH_EXIT_GRACE_MS: '250',
       HEALTH_EXIT_TIMEOUT_MS: '100',

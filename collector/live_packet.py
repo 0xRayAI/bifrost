@@ -2,7 +2,9 @@
 Holds: a Held: comment, or a GitHub label in GITHUB_HOLD_LABEL (default on-hold).
 NO_NUDGE_REPOS (unset means none) stay on the board and are never nudged.
 
-A packet is 7 fields: goal, constraints, path, acceptance, evidence, next owner, escalate. Three forms:
+A packet is goal, constraints, path, acceptance, evidence, next owner, escalate, and raci.
+raci names who does the work (R) and who answers (A): `R=<name> A=<name>`, or one line each for R, A, C, and I.
+Three forms:
   ## Packet                         ### Scope / ### Acceptance / ### Next owner
   - Goal: ...                       (Scope fills goal; ### stays inside the packet)
   single line: Packet: goal: ... | acceptance: ... | next owner: ...
@@ -12,9 +14,11 @@ import os
 import re
 from urllib.parse import urlparse
 
-FIELDS = ("goal", "constraints", "path", "acceptance", "evidence", "next owner", "escalate")
+FIELDS = ("goal", "constraints", "path", "acceptance", "evidence", "next owner", "escalate", "raci")
 ALIAS = {"next": "next owner", "next_owner": "next owner", "owner": "next owner", "constraint": "constraints",
          "accept": "acceptance", "done when": "acceptance", "escalation": "escalate", "scope": "goal"}
+_LETTER = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?([RACI])(?:\*\*)?\s*:\s*(.+)$", re.I)
+_ROLE = re.compile(r"(?:^|[\s,;·])([RACI])\s*[=:]\s*(\S+)", re.I)
 MAX = 200
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 URL = re.compile(r"https?://[^\s)>\]]+")
@@ -118,6 +122,27 @@ def repo_no_nudge(repo, patterns=None):
     return False
 
 
+def raci_roles(value):
+    """Names after R=, A=, C=, or I= in a raci line."""
+    found = {}
+    for match in _ROLE.finditer(str(value or "")):
+        found[match.group(1).upper()] = match.group(2)
+    return found
+
+
+def raci_gaps(packet, state="live", pinned=False):
+    """R and A still missing. Closed and pinned cards stay quiet."""
+    if pinned or state == "closed":
+        return []
+    roles = raci_roles((packet or {}).get("raci") if isinstance(packet, dict) else "")
+    return [key for key in ("R", "A") if not roles.get(key)]
+
+
+def _join_raci(roles):
+    parts = [f"{key}={roles[key]}" for key in ("R", "A", "C", "I") if roles.get(key)]
+    return clean(" ".join(parts))
+
+
 def _key(k):
     k = re.sub(r"[*_`]", "", k).strip().lower()
     k = ALIAS.get(k, k)
@@ -171,12 +196,18 @@ def parse(body):
     out = {}
     block = _packet_block(text)
     if block:
-        current, buf = None, []
+        current, buf, letters = None, [], {}
         for line in block.splitlines():
             heading = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", line)
             if heading:
                 _flush_field(out, current, buf)
                 current, buf = _key(re.sub(r":\s*$", "", heading.group(2).strip())), []
+                continue
+            letter = _LETTER.match(line)
+            if letter and letter.group(2).strip():
+                _flush_field(out, current, buf)
+                current, buf = None, []
+                letters[letter.group(1).upper()] = letter.group(2).strip()
                 continue
             lm = re.match(r"^\s*(?:[-*]\s*)?(?:\*\*)?([A-Za-z _]{3,20}?)(?:\*\*)?\s*:\s*(.+)$", line)
             if lm and _key(lm.group(1)) and lm.group(2).strip():
@@ -187,6 +218,15 @@ def parse(body):
             if current is not None:
                 buf.append(line)
         _flush_field(out, current, buf)
+        if letters:
+            roles = raci_roles(out.get("raci"))
+            for key, raw in letters.items():
+                value = clean(raw)
+                if value:
+                    roles[key] = value
+            joined = _join_raci(roles)
+            if joined:
+                out["raci"] = joined
     if not out:
         sm = re.search(r"^\s*\**packet\**\s*:\s*(.+)$", text, re.I | re.M)
         if sm:

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Sync the live app to xray `house/live/app` at `a0090056` (includes the Arch1 backlog tile). `/healthz` keeps `arch1_inbox` `{open, head, backlog}`. Collector modules are recommitted from that tree's assemble sources. `arch1_launch` stays off.
 - The board shows Arch1 backlog depth before open now. A card that already has an L3 does not get another while that backlog is open. #731 #768.
 - A missed /healthz makes the supervisor exit 1 so ON_FAILURE replaces the one replica. The replica pid is not SIGKILL'd. The collector is not signaled for that miss.
 - The board header says Refreshed for the page pull. The light says Last activity for the newest GitHub event.

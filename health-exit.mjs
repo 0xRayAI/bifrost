@@ -22,6 +22,9 @@ function directRun() {
 
 function supervise() {
   const missMs = positive('HEALTH_EXIT_MISS_MS', 30000);
+  // The first feed apply can block /healthz longer than the steady miss.
+  // Killing that boot crash-loops the one replica until Railway leaves it crashed.
+  const bootMs = positive('HEALTH_EXIT_BOOT_MS', 120000);
   const everyMs = positive('HEALTH_EXIT_EVERY_MS', 5000);
   const graceMs = positive('HEALTH_EXIT_GRACE_MS', 6000);
   const timeoutMs = positive('HEALTH_EXIT_TIMEOUT_MS', 4000);
@@ -32,6 +35,8 @@ function supervise() {
   const child = spawn(process.execPath, [childEntry], { env: process.env, stdio });
   let mode = 'run';
   let lastOk = Date.now();
+  let seenBeat = false;
+  let probing = false;
   let graceTimer = null;
   let capTimer = null;
 
@@ -51,13 +56,22 @@ function supervise() {
   child.on('error', () => finish(1));
 
   function probe() {
-    if (mode !== 'run' || !port) return;
+    if (mode !== 'run' || !port || probing) return;
+    probing = true;
     const req = http.get({ hostname: '127.0.0.1', port, path: '/healthz', timeout: timeoutMs }, (res) => {
       res.resume();
-      if (res.statusCode === 200 || res.statusCode === 503) lastOk = Date.now();
+      if (res.statusCode === 200 || res.statusCode === 503) {
+        lastOk = Date.now();
+        seenBeat = true;
+      }
     });
     req.on('timeout', () => req.destroy());
     req.on('error', () => {});
+    req.on('close', () => { probing = false; });
+  }
+
+  function limitMs() {
+    return seenBeat ? missMs : Math.max(missMs, bootMs);
   }
 
   function beginMiss() {
@@ -88,7 +102,7 @@ function supervise() {
   const timer = setInterval(() => {
     if (mode !== 'run') return;
     probe();
-    if (beatLate(lastOk, Date.now(), missMs)) beginMiss();
+    if (beatLate(lastOk, Date.now(), limitMs())) beginMiss();
   }, everyMs);
   timer.unref();
 }

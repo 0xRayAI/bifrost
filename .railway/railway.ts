@@ -9,6 +9,8 @@ import { defineRailway, project, service } from "railway/iac";
 
 export default defineRailway(() => {
   const live = service("live-mesh", {
+    // Railway's start command replaces ENTRYPOINT (#580). This script chowns
+    // the root-mounted volume, then execs `node server.mjs` as the image node user.
     start: "/app/docker-entrypoint.sh",
     healthcheck: "/healthz",
     replicas: 1,

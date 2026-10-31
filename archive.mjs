@@ -8,8 +8,8 @@ export const KINDS = ['events', 'cards', 'inbox', 'nudges', 'acks', 'activity'];
 const CAP = 300;
 const DROP = /body|text|message|secret|token|password|authorization/i;
 const FIELDS = {
-  events: ['t_ct', 'from', 'to', 'kind', 'direction', 'label', 'source', 'src_file', 'repo', 'number', 'credit', 'status', 'sha', 'actor', 'author', 'merged_by'],
-  cards: ['key', 'repo', 'number', 'title', 'url', 'owner', 'stage', 'state', 'kind', 'verb', 'merged_by', 'labels', 'agents', 'pinned', 'section', 'stall', 'nudge', 'last_beat_t', 'packet_ok', 'waiting', 'packet', 'hold', 'beats', 't_ct', 'updated_ct'],
+  events: ['t_ct', 'from', 'to', 'kind', 'direction', 'label', 'source', 'src_file', 'repo', 'number', 'credit', 'status', 'sha', 'actor', 'author', 'merged_by', 'app'],
+  cards: ['key', 'repo', 'number', 'title', 'url', 'owner', 'stage', 'state', 'kind', 'verb', 'merged_by', 'labels', 'agents', 'pinned', 'section', 'stall', 'nudge', 'last_beat_t', 'packet_ok', 'raci_missing', 'waiting', 'packet', 'hold', 'beats', 't_ct', 'updated_ct'],
   inbox: ['t_ct', 'seat', 'type', 'repo', 'number', 'sha', 'title', 'url', 'reason'],
   nudges: ['kind', 't', 't_ct', 'card', 'repo', 'number', 'title', 'url', 'stage', 'level', 'seat', 'via', 'beat_t', 'closed_at', 'about'],
   acks: ['seat', 'line', 't_ct', 'review'],
@@ -19,6 +19,71 @@ const FIELDS = {
 const seen = new Set();
 let root = '';
 let cardCache = null;
+let archiveSink = null;
+
+// A settled card was archived again on every board clock. Those days are hundreds of MB.
+// Boot and /history must not parse them. New rows for that day go to cards-tail.jsonl until the
+// fold replaces the dump. A small tail stays readable beside a fresh primary.
+export function cardsReadMax() {
+  const raw = process.env.MESH_CARDS_READ_MAX;
+  if (raw == null || raw === '') return 8 * 1024 * 1024;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 8 * 1024 * 1024;
+}
+
+function fileSize(file) {
+  try { return fs.statSync(file).size; }
+  catch { return 0; }
+}
+
+function cardsStore(day) {
+  const primary = path.join(root, day, 'cards.jsonl');
+  const tail = path.join(root, day, 'cards-tail.jsonl');
+  const max = cardsReadMax();
+  const tailSize = fileSize(tail);
+  const tailOk = tailSize > 0 && tailSize <= max;
+  if (fileSize(primary) > max) return { write: tail, read: tailOk ? [tail] : [] };
+  return { write: primary, read: tailOk ? [primary, tail] : [primary] };
+}
+
+function cardBookPath() {
+  return path.join(root, 'cards.jsonl');
+}
+
+function takeCardFile(file, map) {
+  if (!file || fileSize(file) <= 0 || fileSize(file) > cardsReadMax()) return;
+  forEachJsonLine(file, (line) => {
+    let row;
+    try { row = JSON.parse(line); }
+    catch { return; }
+    const key = String(row && row.key || '').toLowerCase();
+    if (!key || row.kind === 'source') return;
+    map.set(key, mergeCardRow(map.get(key), row));
+  });
+}
+
+function writeCardBook(map) {
+  const rows = [...map.values()];
+  const body = rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : '');
+  if (Buffer.byteLength(body) > cardsReadMax()) return false;
+  const file = cardBookPath();
+  const tmp = file + '.tmp';
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(tmp, body);
+  fs.renameSync(tmp, file);
+  return true;
+}
+
+function rememberCardBook() {
+  const file = cardBookPath();
+  if (fileSize(file) <= 0 || fileSize(file) > cardsReadMax()) return;
+  forEachJsonLine(file, (line) => {
+    try {
+      const row = JSON.parse(line);
+      if (row && row.id) seen.add('cards\0' + row.id);
+    } catch { /* truncated or corrupt line */ }
+  });
+}
 const transitionIds = new Set();
 let transitionLatest = new Map();
 const TRANSITION_VERBS = new Set(['opened', 'stage', 'parked', 'held', 'released', 'merged', 'closed', 'reopened']);
@@ -104,6 +169,37 @@ function logRead(e) {
 // #290: startup reads only the newest WARM_DAYS day dirs; any other day's ids load lazily on its first append.
 const WARM_DAYS = Math.max(1, Number(process.env.MESH_ARCHIVE_WARM_DAYS) || 2);
 const loadedDays = new Set();
+const LINE_CAP = 1024 * 1024;
+
+/** One jsonl line at a time. A file past the string cap still yields its rows. */
+export function forEachJsonLine(file, onLine) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); }
+  catch (e) { logRead(e); return; }
+  const chunk = Buffer.alloc(64 * 1024);
+  let pending = Buffer.alloc(0);
+  try {
+    for (;;) {
+      const n = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (n <= 0) break;
+      pending = Buffer.concat([pending, chunk.subarray(0, n)]);
+      let start = 0;
+      for (let i = 0; i < pending.length; i += 1) {
+        if (pending[i] !== 10) continue;
+        const end = i > start && pending[i - 1] === 13 ? i - 1 : i;
+        if (end - start <= LINE_CAP && end > start) onLine(pending.toString('utf8', start, end));
+        start = i + 1;
+      }
+      pending = Buffer.from(pending.subarray(start));
+      if (pending.length > LINE_CAP) pending = Buffer.alloc(0);
+    }
+    if (pending.length && pending.length <= LINE_CAP) onLine(pending.toString('utf8'));
+  } catch (e) {
+    logRead(e);
+  } finally {
+    try { fs.closeSync(fd); } catch { /* closed */ }
+  }
+}
 
 function loadDay(day) {
   if (loadedDays.has(day)) return;
@@ -112,22 +208,33 @@ function loadDay(day) {
   let names;
   try { names = fs.readdirSync(dir); }
   catch (e) { logRead(e); return; }
+  let sawCards = false;
   for (const name of names) {
     if (!name.endsWith('.jsonl')) continue;
     const kind = name.slice(0, -6);
     if (!KINDS.includes(kind)) continue;
-    let text;
-    try { text = fs.readFileSync(path.join(dir, name), 'utf8'); }
-    catch (e) { logRead(e); continue; }
-    for (const line of text.split('\n')) {
-      if (!line) continue;
-      try {
-        const row = JSON.parse(line);
-        const id = kind === 'inbox' ? recordId(kind, row) : row && row.id;
-        if (row && row.id && id) seen.add(kind + '\0' + id);
-      } catch { /* truncated or corrupt line */ }
+    const file = path.join(dir, name);
+    if (kind === 'cards') {
+      sawCards = true;
+      for (const cardFile of cardsStore(day).read) rememberKind(kind, cardFile);
+      continue;
     }
+    rememberKind(kind, file);
   }
+  // After a fold the giant cards.jsonl is gone. The tail name is not a kind, and it is the history.
+  if (!sawCards) {
+    for (const cardFile of cardsStore(day).read) rememberKind('cards', cardFile);
+  }
+}
+
+function rememberKind(kind, file) {
+  forEachJsonLine(file, (line) => {
+    try {
+      const row = JSON.parse(line);
+      const id = kind === 'inbox' ? recordId(kind, row) : row && row.id;
+      if (row && row.id && id) seen.add(kind + '\0' + id);
+    } catch { /* truncated or corrupt line */ }
+  });
 }
 
 function loadSeen() {
@@ -147,6 +254,7 @@ export function initArchive(dataDir) {
   transitionIds.clear();
   transitionLatest = new Map();
   loadSeen();
+  rememberCardBook();
   loadTransitionIndex();
   return root;
 }
@@ -156,6 +264,121 @@ export function archiveDays() {
   try { names = fs.readdirSync(root); }
   catch (e) { logRead(e); return []; }
   return names.filter(validArchiveDate).sort();
+}
+
+export function archiveRoot() { return root; }
+
+export function setArchiveSink(fn) { archiveSink = typeof fn === 'function' ? fn : null; }
+
+function stampMs(row) {
+  const t = Date.parse((row && (row.updated_ct || row.t_ct)) || '');
+  return Number.isFinite(t) ? t : 0;
+}
+
+function earlierStamp(a, b) {
+  const ta = Date.parse(a || '');
+  const tb = Date.parse(b || '');
+  if (!Number.isFinite(ta)) return typeof b === 'string' ? b : (typeof a === 'string' ? a : '');
+  if (!Number.isFinite(tb)) return a;
+  return ta <= tb ? a : b;
+}
+
+// Latest snapshot wins. t_ct stays the earliest, so a folded row still knows when the card opened.
+export function mergeCardRow(prev, row) {
+  if (!prev) return row;
+  if (!row) return prev;
+  const opened = earlierStamp(prev.t_ct, row.t_ct);
+  const base = stampMs(row) >= stampMs(prev) ? row : prev;
+  return { ...base, t_ct: opened || base.t_ct };
+}
+
+export function foldCardRows(rows) {
+  const map = new Map();
+  for (const row of rows || []) {
+    const key = String(row && row.key || '').toLowerCase();
+    if (!key) continue;
+    map.set(key, mergeCardRow(map.get(key), row));
+  }
+  return [...map.values()];
+}
+
+export function useCardRows(rows) {
+  cardCache = Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [];
+}
+
+export function reloadCardRows() {
+  cardCache = null;
+  return loadCardCache().slice();
+}
+
+// Folded output plus any tail written while the scan ran. The duplicate dump is removed only after the tail is small.
+export function adoptFoldedCards() {
+  if (!root) return 0;
+  let adopted = 0;
+  const max = cardsReadMax();
+  for (const day of archiveDays()) {
+    const folded = path.join(root, day, 'cards-folded.jsonl');
+    const foldedSize = fileSize(folded);
+    if (!foldedSize) continue;
+    if (foldedSize > max) {
+      try { fs.unlinkSync(folded); } catch { /* leave the dump unread */ }
+      continue;
+    }
+    const map = new Map();
+    const take = (file) => forEachJsonLine(file, (line) => {
+      let row;
+      try { row = JSON.parse(line); }
+      catch { return; }
+      const key = String(row && row.key || '').toLowerCase();
+      if (!key) return;
+      map.set(key, mergeCardRow(map.get(key), row));
+    });
+    take(folded);
+    const tail = path.join(root, day, 'cards-tail.jsonl');
+    if (fileSize(tail) > 0 && fileSize(tail) <= max) take(tail);
+    const body = [...map.values()].map((row) => JSON.stringify(row)).join('\n') + (map.size ? '\n' : '');
+    if (!map.size || Buffer.byteLength(body) > max) {
+      try { fs.unlinkSync(folded); } catch { /* fold was empty */ }
+      continue;
+    }
+    const tmp = tail + '.tmp';
+    fs.writeFileSync(tmp, body);
+    fs.renameSync(tmp, tail);
+    try { fs.unlinkSync(folded); } catch { /* already removed */ }
+    const primary = path.join(root, day, 'cards.jsonl');
+    if (fileSize(primary) > max && fileSize(tail) <= max) {
+      try { fs.unlinkSync(primary); } catch { /* the tail is the history */ }
+    }
+    loadedDays.delete(day);
+    loadDay(day);
+    adopted += map.size;
+  }
+  cardCache = null;
+  return adopted;
+}
+
+// One line per card on the volume. Day card logs are folded in, then removed when they were small enough to read.
+export function adoptCardBook() {
+  if (!root) return 0;
+  const map = new Map();
+  takeCardFile(cardBookPath(), map);
+  const remove = [];
+  for (const day of archiveDays()) {
+    for (const name of ['cards.jsonl', 'cards-tail.jsonl', 'cards-folded.jsonl']) {
+      const file = path.join(root, day, name);
+      const size = fileSize(file);
+      if (!size || size > cardsReadMax()) continue;
+      takeCardFile(file, map);
+      remove.push(file);
+    }
+  }
+  if (!map.size || !writeCardBook(map)) return 0;
+  for (const file of remove) {
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+  }
+  for (const row of map.values()) if (row && row.id) seen.add('cards\0' + row.id);
+  cardCache = null;
+  return map.size;
 }
 
 export function appendArchive(kind, row) {
@@ -168,6 +391,29 @@ export function appendArchive(kind, row) {
   loadDay(day);
   if (seen.has(key)) return false;
   const rec = project(kind, row);
+  if (kind === 'cards') {
+    if (!rec.key || fileSize(cardBookPath()) > cardsReadMax()) return false;
+    const map = new Map();
+    takeCardFile(cardBookPath(), map);
+    const cardKey = String(rec.key).toLowerCase();
+    map.set(cardKey, mergeCardRow(map.get(cardKey), rec));
+    try {
+      if (!writeCardBook(map)) return false;
+    } catch {
+      return false;
+    }
+    seen.add(key);
+    if (cardCache && rec.kind !== 'source') {
+      const at = cardCache.findIndex((item) => String(item && item.key || '').toLowerCase() === cardKey);
+      if (at >= 0) cardCache[at] = mergeCardRow(cardCache[at], rec);
+      else cardCache.push(rec);
+    }
+    if (archiveSink) {
+      try { archiveSink(kind, rec, day); }
+      catch { /* the file write already stands */ }
+    }
+    return true;
+  }
   const file = path.join(root, day, kind + '.jsonl');
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -177,20 +423,27 @@ export function appendArchive(kind, row) {
     return false;
   }
   seen.add(key);
-  if (kind === 'cards' && cardCache && typeof rec.key === 'string' && rec.key && rec.kind !== 'source') cardCache.push(rec);
+  if (archiveSink) {
+    try { archiveSink(kind, rec, day); }
+    catch { /* the file write already stands */ }
+  }
   return true;
 }
 
 function loadCardCache() {
   if (cardCache) return cardCache;
-  const rows = [];
+  const map = new Map();
+  takeCardFile(cardBookPath(), map);
   for (const day of archiveDays()) {
     for (const row of readArchive(day, 'cards').lines) {
-      if (row && typeof row.key === 'string' && row.key && row.kind !== 'source') rows.push(row);
+      if (row && typeof row.key === 'string' && row.key && row.kind !== 'source') {
+        const cardKey = String(row.key).toLowerCase();
+        map.set(cardKey, mergeCardRow(map.get(cardKey), row));
+      }
     }
   }
-  cardCache = rows;
-  return rows;
+  cardCache = [...map.values()];
+  return cardCache;
 }
 
 function textOf(v, n) {
@@ -240,16 +493,12 @@ function scanTransitionRows() {
   try { days = fs.readdirSync(root); }
   catch (e) { logRead(e); return rows; }
   for (const day of days.filter(validArchiveDate).sort()) {
-    let text;
-    try { text = fs.readFileSync(transitionFile(day), 'utf8'); }
-    catch (e) { logRead(e); continue; }
-    for (const line of text.split('\n')) {
-      if (!line) continue;
+    forEachJsonLine(transitionFile(day), (line) => {
       try {
         const row = JSON.parse(line);
         if (row && row.id && row.card) rows.push(row);
       } catch { /* truncated or corrupt line */ }
-    }
+    });
   }
   return rows;
 }
@@ -429,11 +678,17 @@ function pageKeep(list, query, idOf) {
 export function queryTransitions(query = {}) {
   const card = String(query.card || '').toLowerCase();
   const verb = String(query.transition || '');
+  const day = validArchiveDate(query.day) ? String(query.day) : '';
   let rows = scanTransitionRows();
   if (card) rows = rows.filter(row => String(row.card || '').toLowerCase() === card);
   if (verb) rows = rows.filter(row => row.transition === verb);
+  if (day) rows = rows.filter(row => chicagoDay(row.t_ct) === day);
   rows = rows.filter(row => inWindow(row.t_ct, query.since, query.until));
   rows.sort((a, b) => (Date.parse(a.t_ct) || 0) - (Date.parse(b.t_ct) || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (day && !(query && query.cursor)) {
+    const limit = clampLimit(query && query.limit);
+    if (rows.length > limit) rows = rows.slice(rows.length - limit);
+  }
   const paged = pageKeep(rows, query, row => row.id);
   return { transitions: paged.rows, next: paged.next };
 }
@@ -565,15 +820,13 @@ export function cardHistory(query) {
 
 export function readArchive(date, kind) {
   if (!validArchiveDate(date) || !KINDS.includes(kind)) return { lines: [] };
-  const file = path.join(root, date, kind + '.jsonl');
-  let text;
-  try { text = fs.readFileSync(file, 'utf8'); }
-  catch (e) { logRead(e); return { lines: [] }; }
+  const files = kind === 'cards' ? cardsStore(date).read : [path.join(root, date, kind + '.jsonl')];
   const lines = [];
-  for (const line of text.split('\n')) {
-    if (!line) continue;
-    try { lines.push(JSON.parse(line)); }
-    catch { /* truncated or corrupt line */ }
+  for (const file of files) {
+    forEachJsonLine(file, (line) => {
+      try { lines.push(JSON.parse(line)); }
+      catch { /* truncated or corrupt line */ }
+    });
   }
   return { lines };
 }
