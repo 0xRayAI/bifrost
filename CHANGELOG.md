@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The board shows Arch1 backlog depth before open now. A card that already has an L3 does not get another while that backlog is open. #731 #768.
 - A missed /healthz makes the supervisor exit 1 so ON_FAILURE replaces the one replica. The replica pid is not SIGKILL'd. The collector is not signaled for that miss.
 - The board header says Refreshed for the page pull. The light says Last activity for the newest GitHub event.
 
