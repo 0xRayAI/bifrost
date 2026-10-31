@@ -85,7 +85,7 @@ export function createBatch() {
   function deliver(key, row, action) {
     row.seq += 1;
     const [repo, num] = key.split('#');
-    const title = action === 'critic' ? 'ci_pass' : action === 'blaze' ? 'second critic FAIL' : 'red head';
+    const title = action === 'critic' ? 'ci_pass' : action === 'blaze' ? 'second critic FIX' : 'red head';
     const text = row.parts.map((part) => part.kind + ': ' + part.title).join(' · ');
     const batch = (text || title).slice(0, 2000);
     row.parts = [];

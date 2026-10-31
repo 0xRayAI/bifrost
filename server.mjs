@@ -14,6 +14,7 @@ import net from 'node:net';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
@@ -22,13 +23,19 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine } from './wake-gate.mjs';
-import { queueView } from './inbox-queue.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
-import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions } from './archive.mjs';
+import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
+import { openHistory } from './history-store.mjs';
+import { oversizedCardDays, compactOversized } from './compact-cards.mjs';
+import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
 import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { createBatch } from './pr-batch.mjs';
+import { idsToAck } from './ci-clear.mjs';
+import { stationDue } from './station-tick.mjs';
+import { queueView, backlogOf, keepStation, nudgeTargets, markShed } from './inbox-queue.mjs';
+const CI_NODES = loadCiNodes();
 const batch = createBatch();
 
 const PORT = process.env.PORT === '0' ? 0 : (Number(process.env.PORT) || 8080);   // PORT=0: the OS picks a free port (tests); the log line names it
@@ -158,6 +165,8 @@ let rosterSeats = null;
 function creditOf(e) {
   if (typeof e.credit === 'string' && e.credit) return e.credit;
   if (!rosterSeats) { try { rosterSeats = new Set((JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector', 'fleet-roster.json'), 'utf8')).seats || []).map(x => String(x).toLowerCase())); } catch { rosterSeats = new Set(); } }
+  const named = String(e.seat || '').toLowerCase();
+  if (named && named !== 'github') return named;
   const f = String(e.from || '').toLowerCase();
   if (f === 'coord') return cosSeat();
   if (HUMAN_ALIASES[f]) return HUMAN_ALIASES[f];
@@ -325,6 +334,16 @@ function canonSeat(name) {
   if (OPERATOR_NAMES.has(id)) return operatorSeat();
   return SEAT_ALIAS[id] || id;
 }
+function seatToken(name) {
+  const id = canonSeat(name);
+  if (SEAT_IDS.includes(id)) return id;
+  const low = String(name || '').toLowerCase();
+  for (const seat of SEAT_IDS) {
+    if (seat === 'builder' || seat === 'builder-cloud') continue;
+    if (new RegExp('(?:^|[^a-z0-9])' + seat + '(?:[^a-z0-9]|$)').test(low)) return seat;
+  }
+  return id;
+}
 // Builder-cloud: the cloud Builder seat (own key). It reads Builder's work: every builder inbox line is mirrored into its inbox,
 // nudges to builder land in its inbox as type 'nudge', and /cards?seat=builder-cloud shows Builder's cards.
 const SEAT_DISPLAY = { 'builder-cloud': 'Builder-cloud' };
@@ -458,6 +477,21 @@ function handledKeySet(seat) {
   handledCache.set(name, { mtime: st.mtimeMs, size: st.size, file, keys });
   return keys;
 }
+function cardHeadSha(card) {
+  return String(card && (card.sha || card.head_sha || card.head) || '').trim().toLowerCase();
+}
+function headHandled(seat, card) {
+  if (!card) return false;
+  const keys = handledKeySet(seat);
+  if (!keys.lower.size) return false;
+  const repo = String(card.repo || '').trim().toLowerCase();
+  const number = Number(card.number);
+  const sha = cardHeadSha(card);
+  if (!repo || !Number.isInteger(number) || !sha) return false;
+  const prefix = `${repo}#${number}|${sha}|`;
+  for (const key of keys.lower) if (key.startsWith(prefix)) return true;
+  return false;
+}
 function lineHandled(seat, line) {
   if (!line) return false;
   const keys = handledKeySet(seat);
@@ -580,7 +614,7 @@ function wakeErr(e) {
 }
 async function deliverWake(cfg, body) {
   const key = process.env[cfg.keyEnv] || process.env[cfg.seatKeyEnv];
-  if (typeof key !== 'string' || !key || /[\r\n]/.test(key)) return { ok: false, attempts: 0, error: 'no_key' };
+  if (typeof key !== 'string' || !key || /[\r\n]/.test(key)) return { ok: false, attempts: 0, error: 'no_key', outcome: 'failed' };
   const headers = { 'Content-Type': 'application/json', 'User-Agent': 'bifrost-live' };
   if (cfg.bearer) headers.Authorization = 'Bearer ' + key; else headers[cfg.header] = key;
   let error = 'network', detail = '';
@@ -588,13 +622,15 @@ async function deliverWake(cfg, body) {
     try {
       const res = await fetch(cfg.url, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(8000) });
       const text = await res.text().catch(() => '');
-      if (res.ok) return { ok: true, attempts: i };
+      // Overlay no-op: every line already acked. Not a seat failure, and not worth a retry.
+      if (res.status === 409 && res.headers.get('x-bifrost-wake') === 'noop') return { ok: true, attempts: i, outcome: 'skipped', http: 409 };
+      if (res.ok) return { ok: true, attempts: i, outcome: 'delivered' };
       error = 'http_' + res.status;
       detail = wakeDetail(text, key, cfg.url);
     } catch (e) { error = wakeErr(e); }
     if (i < WAKE_ATTEMPTS) await new Promise(r => { const t = setTimeout(r, WAKE_RETRY_MS * (2 ** (i - 1))); if (t.unref) t.unref(); });
   }
-  return { ok: false, attempts: WAKE_ATTEMPTS, error, detail };
+  return { ok: false, attempts: WAKE_ATTEMPTS, error, detail, outcome: 'failed' };
 }
 // non-2xx response body for the log: one line, 160 chars, the key and the webhook url (with its automation id) removed
 function wakeDetail(text, key, url) {
@@ -608,26 +644,33 @@ async function flushWake(seat) {
   const batch = st.pending.splice(0, st.pending.length);
   st.inflight = true; st.lastSent = Date.now();
   let result; try { result = await deliverWake(cfg, JSON.stringify(wakePayload(seat, batch))); }
-  catch { result = { ok: false, attempts: WAKE_ATTEMPTS, error: 'network' }; }
-  st.status = { ok: !!result.ok, attempts: result.attempts, at: new Date().toISOString() };
-  if (!result.ok) st.status.error = result.error || 'network';
-  console.log(`wake: ${seat} ${result.ok ? 'ok' : 'fail'} attempts=${result.attempts}${result.ok ? '' : ' ' + st.status.error}${result.detail ? ' body=' + JSON.stringify(result.detail) : ''}`);
-  if (result.ok) {
-    noteSent(wakeState, seat, batch, Date.now());
-    touchSeat(seat); wakeOkAt[seat] = st.status.at; persistWakeOk();
-    serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
+  catch { result = { ok: false, attempts: WAKE_ATTEMPTS, error: 'network', outcome: 'failed' }; }
+  const outcome = result.outcome || (result.ok ? 'delivered' : 'failed');
+  const at = new Date().toISOString();
+  if (outcome === 'skipped') console.log(`wake: ${seat} skipped (noop)`);
+  else {
+    st.status = { ok: !!result.ok, outcome, attempts: result.attempts, at };
+    if (!result.ok) st.status.error = result.error || 'network';
+    console.log(`wake: ${seat} ${result.ok ? 'ok' : 'fail'} attempts=${result.attempts}${result.ok ? '' : ' ' + st.status.error}${result.detail ? ' body=' + JSON.stringify(result.detail) : ''}`);
+    if (result.ok) {
+      noteSent(wakeState, seat, batch, Date.now());
+      touchSeat(seat); wakeOkAt[seat] = st.status.at; persistWakeOk();
+      serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
+    }
   }
   st.inflight = false;
   const last = batch[batch.length - 1] || {};
   try {
     appendWake(STATE_DIR, {
       seat, id: last.id, ids: batch.map(l => l.id).filter(id => typeof id === 'string' && id),
-      t_ct: st.status.at, ok: !!result.ok, attempts: result.attempts,
+      t_ct: outcome === 'skipped' ? at : st.status.at, ok: outcome === 'skipped' ? true : !!result.ok, attempts: result.attempts,
+      outcome,
+      ...(outcome === 'skipped' ? { http: 409 } : {}),
       title: String(last.title || '').slice(0, 120),
       repo: String(last.repo || '').slice(0, 200), number: Number.isInteger(last.number) ? last.number : 0,
       kind: String(last.type || last.kind || '').slice(0, 64),
       ...(typeof last.sha === 'string' && last.sha ? { sha: last.sha.slice(0, 80) } : {}),
-      ...(result.ok ? {} : { error: String(result.error || 'network').slice(0, 40) }),
+      ...(outcome === 'failed' ? { error: String(result.error || 'network').slice(0, 40) } : {}),
     });
   } catch (e) { console.log('wake: append failed ' + ((e && e.code) || 'write')); }
   armWake(seat);
@@ -635,7 +678,7 @@ async function flushWake(seat) {
 }
 // Last time this process saw each seat act through its inbox (wake 2xx, inbox read, ack); counts toward fleet "active".
 // Acks survive a restart as append-only archive rows and are folded in at startup.
-// The last good wake survives too: persistWakeOk writes wake-ok.json, and loadPersistedWakes restores wakes.jsonl.
+// The last good wake survives too: persistWakeOk writes wake-ok.json, and loadPersistedWakes restores the last non-skipped wakes.jsonl row.
 const seatTouch = {};
 const touchSeat = (seat, t = Date.now()) => { if (seat) seatTouch[seat] = Math.max(seatTouch[seat] || 0, t); };
 const sha256hex = s => crypto.createHash('sha256').update(String(s)).digest('hex');
@@ -734,21 +777,21 @@ function ackLines(seat, what, review) {
     : arr.some(l => l.id === what) ? [what] : null;
   if (!ids) return -1;
   const lineOf = id => arr.find(l => l.id === id);
-  const blocked = id => {
-    const line = lineOf(id);
-    return !!(line && isMergeHandoff(line) && !validMergeReview(review, line));
-  };
-  if (typeof what === 'string' && blocked(what)) return -2;
+  const single = typeof what === 'string' && what !== 'all' && what !== 'stale';
+  let blocked = false;
   for (const id of ids) {
-    if (have.has(id) || blocked(id)) continue;
-    have.add(id); n++;
+    if (have.has(id)) continue;
     const line = lineOf(id);
+    if (line && isMergeHandoff(line) && !validMergeReview(review, line)) { blocked = true; continue; }
+    have.add(id); n++;
     const row = { seat, line: id, t_ct: ctStamp(Date.now()) };
     if (line && isMergeHandoff(line)) row.review = review;
     appendArchive('acks', row);
   }
   const live = new Set(arr.map(l => l.id)); inboxAcks[seat] = [...have].filter(id => live.has(id)).slice(-6000);
-  bfWrite('acks.json', JSON.stringify(inboxAcks)); return n;
+  bfWrite('acks.json', JSON.stringify(inboxAcks));
+  if (single && blocked && n === 0) return -2;
+  return n;
 }
 // Closed items (nudge skips them): the latest close / merge vs reopen event per repo#number, from the merged feed. A line
 // or card on a closed or merged PR / issue is done even when the board no longer carries its card.
@@ -848,7 +891,7 @@ const NUDGE_LINE_MS = Math.max(1, Number(process.env.NUDGE_LINE_S) > 0 ? Number(
 function nudgeLines(now) {
   let changed = false;
   const open = new Set();
-  for (const seat of SEAT_IDS) for (const l of openLines(seat)) {
+  for (const seat of SEAT_IDS) for (const l of nudgeTargets(openLines(seat), queueOpts())) {
     if (itemClosed(l.repo, l.number)) continue;
     const closedCard = lineCard(l);
     if (closedCard && closedCard.state === 'closed') continue;
@@ -987,8 +1030,9 @@ function postSeatLines(parsed, onlySeat) {
   }
   for (const l of outgoing) {
     const s = canonSeat(l.seat), arr = seatInbox[s]; if (!arr || arr.some(x => x.id === l.id)) continue;
-    const stored = { ...l, seat: s };
+    let stored = { ...l, seat: s };
     for (const k of ['from', 'to', 'kind', 'flag']) if (typeof stored[k] === 'string') stored[k] = stored[k].toLowerCase();
+    if (s === 'arch1') stored = markShed(stored, seatOpenRows(s, false), queueOpts());
     arr.push(stored); touched.add(s); added++; fresh.push(stored);
     if (s === 'builder') { const c = seatInbox['builder-cloud']; if (!c.some(x => x.id === l.id)) { const copy = { ...stored, seat: 'builder-cloud' }; c.push(copy); touched.add('builder-cloud'); fresh.push(copy); } } }
   for (const s of touched) saveSeatInbox(s);
@@ -1115,6 +1159,29 @@ function nudgeToCloud(n) {   // a nudge to Builder is also an inbox line for Bui
   if (!validInboxLine({ ...l, seat: 'builder' }) || seatInbox['builder-cloud'].some(x => x.id === l.id)) return;
   seatInbox['builder-cloud'].push(l); saveSeatInbox('builder-cloud'); noteWake('builder-cloud', l);
 }
+function deliverNudge(n) {
+  if (!n) return;
+  const seats = [];
+  const add = seat => {
+    const id = canonSeat(seat);
+    if (!id || !SEAT_IDS.includes(id) || seats.includes(id)) return;
+    seats.push(id);
+  };
+  add(n.seat);
+  for (const seat of seats) {
+    const line = {
+      id: n.id, t_ct: n.t_ct, seat, type: 'nudge',
+      repo: String(n.repo || ''), number: Number.isInteger(n.number) ? n.number : 0,
+      title: String(n.title || '').slice(0, 120), url: String(n.url || '').slice(0, 300),
+      reason: `nudge L${n.level} (${n.via || 'nudge'})`.slice(0, 200),
+    };
+    if (!validInboxLine({ ...line, seat: 'builder' })) continue;
+    const arr = seatInbox[seat];
+    if (!arr || arr.some(x => x.id === line.id)) continue;
+    arr.push(line); saveSeatInbox(seat); noteWake(seat, line);
+  }
+  if (seats.includes('builder')) nudgeToCloud(n);
+}
 function itemsFromWork() {
   const latest = new Map();
   for (const e of work.values()) {
@@ -1191,7 +1258,10 @@ function mergedEventFor(card, events) {
   if (!repo || !Number.isInteger(number)) return null;
   return (events || []).find(e => e && e.kind === 'merged' && String(e.repo || '').toLowerCase() === repo && Number(e.number) === number) || null;
 }
-/** Final merged or closed rows the display cap or the 24h window left off the board. The archive stamp is this write, so a newer live snapshot does not stay last. */
+// One row per settled card. The close time is the card's own closed_t, not the board clock.
+// A moving clock made every restart a new row and filled the day file.
+const settledOnce = new Set();
+/** Final merged or closed rows the display cap or the 24h window left off the board. */
 function archiveFinals(settled, stamp) {
   const events = githubEvents();
   const rows = [];
@@ -1201,16 +1271,22 @@ function archiveFinals(settled, stamp) {
     const hit = mergedEventFor(c, events);
     rows.push({
       ...c, state: 'closed', stage: 'done', verb: hit ? 'merged' : 'closed',
-      merged_by: hit ? (hit.merged_by || hit.from) : c.merged_by, updated_ct: stamp,
+      merged_by: hit ? (hit.merged_by || hit.from) : c.merged_by,
     });
   }
   for (const c of rows) {
     const hit = mergedEventFor(c, events);
     const verb = hit ? 'merged' : (c.verb === 'merged' || c.verb === 'closed' ? c.verb : 'closed');
+    const ident = [c.key, 'done', 'closed', verb].join('|').toLowerCase();
+    if (settledOnce.has(ident)) continue;
+    settledOnce.add(ident);
+    const closedMs = Number(c.closed_t);
+    const beatMs = Number(c.last_beat_t);
+    const stableMs = Number.isFinite(closedMs) && closedMs > 0 ? closedMs : (Number.isFinite(beatMs) && beatMs > 0 ? beatMs : 0);
     archiveCard({
       ...c, state: 'closed', stage: 'done', verb,
       merged_by: (hit && (hit.merged_by || hit.from)) || c.merged_by,
-      updated_ct: stamp,
+      updated_ct: stableMs ? new Date(stableMs).toISOString() : stamp,
     }, stamp);
   }
 }
@@ -1241,7 +1317,8 @@ function setCards(wb) {
   takeTransitions(wb.transitions);
   if (!Array.isArray(wb.cards)) return;
   const stamp = wb.updated_ct || new Date().toISOString();
-  const sliced = wb.cards.slice(0, 200);
+  // Runaway backstop only. The model no longer page-caps an open issue or PR.
+  const sliced = wb.cards.slice(0, 2000);
   const kept = acceptWaveCards(sliced, waveCards, {
     stalled: feedStalled(),
     feedAgeMs: feedFileAgeMs(),
@@ -1311,7 +1388,7 @@ function applyStartAfter(now = Date.now()) {
   return changed;
 }
 // NUDGE: a live card with no beat for 60 min -> level 1 to the packet's next owner (else the card owner); still no
-// beat 30 min after that -> level 2 to Coord. Level 3 then repeats to that same owner every 2h until a beat lands.
+// The card nudge is an inbox line for that seat, so the webhook fires. It does not open an L2 record and it does not wake the CoS seat to reassign. Level 3 then repeats to that same owner every 2h.
 // Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no L1/L2/L3. It nudges
 // the owner once if it stays held with no beat past HELD_MAX_S (default 72h), unless the repo is in that list.
 function evalNudges(now = Date.now()) {
@@ -1338,7 +1415,7 @@ function evalNudges(now = Date.now()) {
         nudges.push({ id: nid, kind: 'held', t: now, t_ct: ctStamp(now), card: c.key, repo: c.repo || '', number: c.number || 0,
           title: String(c.title || '').slice(0, 120), url: String(c.url || '').slice(0, 300), stage: c.stage || '', level: 0, seat, via: 'held past max', beat_t: c.last_beat_t });
         changed = true;
-        if (seat === 'builder') nudgeToCloud(nudges[nudges.length - 1]);
+        deliverNudge(nudges[nudges.length - 1]);
       }
     }
     if (batch.inBeat(startKeyOf(c))) {
@@ -1354,9 +1431,17 @@ function evalNudges(now = Date.now()) {
     const id = lvl => `nudge:${c.key}:L${lvl}:${c.last_beat_t}`, has = lvl => nudges.find(n => n.id === id(lvl));
     const mk = (lvl, seat, via, nid = id(lvl)) => { nudges.push({ id: nid, t: now, t_ct: ctStamp(now), card: c.key, repo: c.repo || '', number: c.number || 0,
       title: String(c.title || '').slice(0, 120), url: String(c.url || '').slice(0, 300), stage: c.stage || '', level: lvl, seat, via, beat_t: c.last_beat_t }); changed = true;
-      if (seat === 'builder') nudgeToCloud(nudges[nudges.length - 1]); };
+      deliverNudge(nudges[nudges.length - 1]); };
     const to = seatIdOf(c.nudge_to), nx = to || seatIdOf((c.packet || {})['next owner']);
     const tgt = nx || seatIdOf(c.owner) || cosSeat(), via = to ? (c.nudge_via || 'retest owner') : nx ? 'next owner' : 'card owner';
+    if (headHandled(tgt, c)) {
+      for (const n of nudges) {
+        if (n.closed_at || n.card !== c.key || n.beat_t !== c.last_beat_t) continue;
+        n.closed_at = new Date(now).toISOString();
+        changed = true;
+      }
+      continue;
+    }
     const l1s = nudges.filter(n => n.id === id(1) || n.id.startsWith(id(1) + ':'));
     let l1 = l1s[l1s.length - 1];
     if (!l1) { mk(1, tgt, via); l1 = has(1); }
@@ -1614,8 +1699,14 @@ function mergedHeader(now = Date.now()) {
   if (h.fleet) h.fleet = clearClosedWork(h.fleet);
   if (h.fleet) h.fleet = applyTurnRelease(h.fleet, now);   // an ended turn clears older marks; a fresh later mark stays. a cloud via is not a seat turn
   const cf = applyCloudOwners(h.fleet, h.cloud_agents, now); if (cf) h.fleet = cf;   // a running agent stays on its own id; the seat stays idle
+  if (h.fleet) h.fleet = bindSeatWorkToCards(h.fleet);   // working requires an open card once the board has one
   if (h.fleet) h.fleet = stampClockTree(h.fleet);
   if (h.fleet) h.fleet.seat_display = { ...SEAT_DISPLAY, ...jsonEnvObj('SEAT_DISPLAY_NAMES') };
+  if (h.fleet && h.fleet.cloud && typeof h.fleet.cloud === 'object' && !Array.isArray(h.fleet.cloud)) {
+    const nodes = Array.isArray(h.product_nodes) ? h.product_nodes.filter(n => n !== 'burst-live') : [];
+    if (!nodes.includes('CloudAgents')) nodes.push('CloudAgents');
+    h.product_nodes = nodes;
+  }
   h.freshness = stampClockTree({
     github_latest_ct: githubDataAt ? new Date(githubDataAt).toISOString() : null,
     github_card_latest_ct: githubCardAt ? new Date(githubCardAt).toISOString() : null,
@@ -1889,6 +1980,7 @@ function buildLoginMap() {
 }
 function loginMap() { if (!loginToSeat) loginToSeat = buildLoginMap(); return loginToSeat; }
 function githubWorkKind(kind) {
+  if (kind === 'merged') return true;
   if (CLOSE_KINDS.has(kind)) return false;
   return GH_WORK_KINDS.has(kind) || kind.startsWith('issue_');
 }
@@ -1901,10 +1993,12 @@ function workOnOf(e) {
 }
 function seatOfGithub(e) {
   const map = loginMap();
-  for (const key of ['actor', 'author', 'sender', 'user', 'merged_by', 'triggering_actor']) {
+  for (const key of ['actor', 'author', 'sender', 'user', 'merged_by', 'triggering_actor', 'from', 'credit']) {
     const login = e[key];
-    if (typeof login !== 'string' || !login) continue;
-    const hit = map.get(login.toLowerCase());
+    if (typeof login !== 'string' || !login.trim()) continue;
+    const low = login.trim().toLowerCase();
+    if (SEAT_IDS.includes(low)) return low;
+    const hit = map.get(low);
     if (hit) return hit;
   }
   const blob = ['actor', 'label', 'branch', 'ref', 'head', 'head_ref', 'title', 'source'].map(k => typeof e[k] === 'string' ? e[k] : '').join(' ');
@@ -2009,7 +2103,124 @@ function clearClosedWork(fleet) {
   }
   return changed ? { ...fleet, seats, working } : fleet;
 }
+function cardIsActiveWork(card) {
+  if (!card || card.pinned) return false;
+  const state = String(card.state || '').toLowerCase();
+  const stage = String(card.stage || '').toLowerCase();
+  if (state === 'closed' || state === 'parked' || state === 'held') return false;
+  if (stage === 'done') return false;
+  return !cardIsClosed(card);
+}
+function cardNextOwner(card) {
+  const packet = card && card.packet && typeof card.packet === 'object' ? card.packet : null;
+  const next = packet && (packet['next owner'] || packet.next_owner);
+  return String(next || (card && card.owner) || '').trim();
+}
+function workText(row, seat) {
+  if (row && row.working_on) return String(row.working_on);
+  if (row && row.pr) return String(row.pr);
+  if (row && row.on) return String(row.on);
+  if (seat && seat.working_on) return String(seat.working_on);
+  return '';
+}
+function cardMatchesWork(card, on) {
+  const target = workTarget(on);
+  if (!target) {
+    const low = String(on || '').trim().toLowerCase();
+    return !!low && !!card && String(card.key || '').toLowerCase() === low;
+  }
+  const repo = String(card.repo || '').toLowerCase();
+  const key = String(card.key || '').toLowerCase();
+  const full = (String(target.repo) + '#' + target.number).toLowerCase();
+  const n = Number(card.number);
+  if (key === full) return true;
+  if (!repo || n !== target.number) return false;
+  const id = repo + '#' + n;
+  return id === full || id.endsWith('/' + full) || full.endsWith('/' + id);
+}
+// A seat stays working only while an open board card is that work.
+// Before the first card loads, the in-flight mark stays so a cold boot is not a blank fleet.
+// A loaded board with no open card clears working.
+function bindSeatWorkToCards(fleet) {
+  if (!fleet) return fleet;
+  if (!bfCards.length) return fleet;
+  const open = bfCards.filter(cardIsActiveWork);
+  const seats = { ...(fleet.seats || {}) };
+  const working = { ...(fleet.working || {}) };
+  let changed = false;
+  const names = new Set([...Object.keys(seats), ...Object.keys(working)]);
+  for (const name of names) {
+    if (name === 'CloudAgents') continue;
+    const row = working[name];
+    const seat = seats[name];
+    if (!row && !(seat && seat.working)) continue;
+    const on = workText(row, seat);
+    const named = workTarget(on);
+    const packetKey = !named && String(on).toLowerCase().startsWith('packet:');
+    let keep = false;
+    if (named || packetKey) {
+      keep = open.some(card => cardMatchesWork(card, on));
+      if (keep && on) {
+        if (row && !row.working_on) { working[name] = { ...row, working_on: on }; changed = true; }
+        if (seat && !seat.working_on) { seats[name] = { ...seat, working_on: on }; changed = true; }
+      }
+    } else if (on) keep = open.some(card => seatToken(name) === seatToken(cardNextOwner(card)));
+    else {
+      const owned = open.filter(card => seatToken(name) === seatToken(cardNextOwner(card)));
+      keep = owned.length > 0;
+      if (owned.length === 1) {
+        const card = owned[0];
+        const key = card.repo && Number(card.number) >= 1 ? String(card.repo) + '#' + Number(card.number) : String(card.key || '');
+        if (key) {
+          if (row && !row.working_on) { working[name] = { ...row, working_on: key }; changed = true; }
+          if (seat && !seat.working_on) { seats[name] = { ...(seats[name] || seat), working_on: key }; changed = true; }
+        }
+      }
+    }
+    if (keep) continue;
+    if (working[name]) { delete working[name]; changed = true; }
+    if (seat && (seat.working || seat.working_on || seat.working_via)) {
+      const next = { ...seat, working: false };
+      delete next.working_via;
+      delete next.working_on;
+      seats[name] = next;
+      changed = true;
+    }
+  }
+  if (!changed) return fleet;
+  return { ...fleet, seats, working, active: Object.values(seats).filter(v => v && v.active && !v.external).length };
+}
 setInterval(() => governorRun(), GOV_MS).unref();
+// Weekday half hour. A test bind stays quiet. Railway posts unless STATION_NUDGE=off.
+let stationPosted = '';
+function stationClock(now) {
+  const raw = String(process.env.STATION_NOW || '').trim();
+  if (!raw) return now;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+function stationTickOn() {
+  const flag = String(process.env.STATION_NUDGE || '').trim();
+  if (flag === 'off') return false;
+  if (flag === 'on') return true;
+  if (!process.env.RAILWAY_ENVIRONMENT) return false;
+  return process.env.PORT !== '0';
+}
+function stationTick(now = new Date()) {
+  if (!stationTickOn()) return;
+  const when = stationClock(now);
+  if (!when) return;
+  const due = stationDue(when, stationPosted, SEAT_IDS);
+  if (!due) return;
+  const lines = due.lines.filter((line) => keepStation(seatOpenRows(line.seat, false)));
+  if (!lines.length) { stationPosted = due.hour; return; }
+  const r = postSeatLines({ lines }, null);
+  if (r.status !== 200) return;
+  stationPosted = due.hour;
+  if (r.added) { seq++; header = mergedHeader(); fullDirty = true; }
+}
+setInterval(() => { try { stationTick(); } catch { /* the next minute retries */ } }, 60000).unref();
+try { stationTick(); } catch { /* the next minute retries */ }
 header = mergedHeader();
 function full() {   // built lazily: only the first full GET after a change pays for stringify + gzip
   refreshWorking();
@@ -2083,11 +2294,12 @@ function since(c, raw = false) {   // raw: unmasked (ingest-secret inbox routing
 // env is built from scratch: no ingest secret, session secret or mesh password, and the token is never logged.
 const DATA_DIR = process.env.MESH_DATA_DIR || '/data';
 const GH_FEED = path.join(DATA_DIR, 'feed', 'github-events.json');
+const GH_BEAT = path.join(DATA_DIR, 'feed', 'github-events.beat.json');
 const JIRA_FEED = path.join(DATA_DIR, 'feed', 'jira-events.json');
 const jira = { pid: null, restarts: 0, lastWrite: 0, sig: '' };
 const COLLECTOR_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 const COLLECTOR_REPOS = (process.env.COLLECTOR_REPOS || 'example-org/app example-org/mcp').split(/\s+/).filter(Boolean);
-const collector = { pid: null, restarts: 0, lastExit: null, lastWrite: 0, sig: '', repos: COLLECTOR_REPOS, child: null };
+const collector = { pid: null, restarts: 0, lastExit: null, lastWrite: 0, sig: '', beatSig: '', repos: COLLECTOR_REPOS, child: null };
 // COLLECTOR_ORG=org (D18): watch every repo the token can see in that org, unioned with COLLECTOR_REPOS; re-listed every
 // COLLECTOR_ORG_REFRESH_S (3600). A changed list restarts the collector child with the new repos. A failed listing keeps the last list.
 async function orgRepos(org, tok) {
@@ -2195,7 +2407,7 @@ async function startCollector() {
   const args = ['-B', '-u', script, '--out', GH_FEED, '--watch', process.env.COLLECTOR_WATCH_S || '45',
     '--repos', ...collector.repos, '--deploy-repo', '', '--health', healthArg];
   const child = spawn('python3', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  collector.pid = child.pid; collector.child = child; collector.startedAt = Date.now(); collector.loopAt = 0; collector.watchKilled = false;
+  collector.pid = child.pid; collector.child = child; collector.startedAt = Date.now(); collector.watchKilled = false;
   console.log(`collector: started pid ${child.pid}`);
   for (const st of [child.stdout, child.stderr]) {
     let buf = '';
@@ -2333,24 +2545,32 @@ function watchLimitMs() {
   const mult = Number.isFinite(n) && n > 0 ? n : 3;
   return interval * mult;
 }
-function stallTick() {
-  // On-disk mtime from before this process is not a completed loop. Later of start and last loop.
-  return Math.max(collector.startedAt || 0, collector.loopAt || 0);
+function collectorTick(fallback = 0) {
+  // Count a write only when it is newer than this child. A stale feed mtime must not be the stall clock.
+  const wrote = collector.lastWrite || 0;
+  const started = collector.startedAt || 0;
+  const tick = wrote > started ? wrote : started;
+  return tick || fallback;
 }
 function feedStalled(now = Date.now()) {
   if (process.env.COLLECTOR === 'off' || !process.env.GITHUB_READ_TOKEN) return false;
   if (!collector.child && !collector.watchKilled) return false;
-  const tick = stallTick();
+  const tick = collectorTick();
   if (!tick) return false;
   return now - tick > watchLimitMs();
 }
-function feedFileAgeMs(now = Date.now()) {
+function fileAgeMs(file, now) {
   try {
-    const age = now - fs.statSync(GH_FEED).mtimeMs;
+    const age = now - fs.statSync(file).mtimeMs;
     return age > 0 ? age : 0;
   } catch {
-    return 0;
+    return null;
   }
+}
+function feedFileAgeMs(now = Date.now()) {
+  const ages = [fileAgeMs(GH_FEED, now), fileAgeMs(GH_BEAT, now)].filter((age) => age != null);
+  if (!ages.length) return 0;
+  return Math.min(...ages);
 }
 function feedHealthLine(why) {
   upsert({ id: 'health:feed-loop', t_ct: ctStamp(Date.now()), from: 'watchdog', to: 'GitHub', kind: 'health_fail',
@@ -2361,7 +2581,7 @@ function feedHealthLine(why) {
 function watchFeed() {
   if (!feedStalled() || collector.watchKilled || !collector.child) return;
   collector.watchKilled = true;
-  const age = Math.round((Date.now() - stallTick()) / 1000);
+  const age = Math.round((Date.now() - collectorTick(Date.now())) / 1000);
   feedHealthLine(`feed loop stalled ${age}s; restarting`);
   try { collector.child.kill('SIGTERM'); } catch { /* exit handler restarts the loop */ }
 }
@@ -2420,28 +2640,88 @@ function healthBody() {   // public: counts, times, ages (s) and wake states; no
     card_stale_s: CARD_STALE_S, data_stale_s: DATA_STALE_S, board: boardWord(),
     cards_behind: behind, stale_status: staleStatus,
     last_tick: passAt ? new Date(passAt).toISOString() : null, stalled,
-    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), arch1_launch: arch1Launch.health(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
+    history_ready: historyState.ready, history_redis: historyState.redis, history_cards: historyState.cards,
+    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), arch1_launch: arch1Launch.health(), arch1_inbox: arch1InboxDepth(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
   if (warming) body.status = 'warming';
   return body;
 }
-function readCollectorFeed() {   // every 2 s: ingest the collector's file when it changed (atomic rename by the writer)
-  let st; try { st = fs.statSync(GH_FEED); } catch { return; }
-  const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
-  if (sig === collector.sig) return;
-  let f; try { f = JSON.parse(fs.readFileSync(GH_FEED, 'utf8')); } catch { return; }   // mid-replace: next tick
-  if (!validFeed(f)) { collector.sig = sig; console.log('collector: feed file invalid; ignored'); return; }
-  collector.sig = sig; collector.lastWrite = st.mtimeMs;   // quiet file: age is the file's age, including across a redeploy
-  if (collector.startedAt && st.mtimeMs >= collector.startedAt) collector.loopAt = st.mtimeMs;
+let feedEventHash = '';
+let feedRead = null;
+function applyCollectorHeader(hdr) {
+  const S = SRCS.github;
+  seq++; S.seq++; S.at = Date.now(); S.header = hdr;
+  const at = typeof hdr.generated_at === 'string' ? hdr.generated_at : new Date().toISOString();
+  for (const full of collector.repos) {
+    const prev = repoSeen.get(full);
+    repoSeen.set(full, { last_collected: at, newest_event: prev ? prev.newest_event : null });
+  }
+  recomputeGithubDataAt();
+  const packetHeld = bfCards.some(c => c && (c.born === 'packet' || String(c.key || '').toLowerCase().startsWith('packet:')));
+  if (packetHeld && !(S.header && S.header.board)) publishBoard();
+  header = mergedHeader();
+  fullDirty = true;
+}
+function applyFeedRead(msg) {
+  if (!msg || !msg.ok) {
+    if (msg && msg.error === 'invalid' && msg.sig) collector.sig = msg.sig;
+    return;
+  }
+  collector.sig = msg.sig; collector.lastWrite = msg.mtimeMs;   // quiet file: age is the file's age, including across a redeploy
   collector.watchKilled = false;
+  feedEventHash = msg.eventHash;
   if (evs.has('health:feed-loop')) { evs.delete('health:feed-loop'); fullDirty = true; }
-  repoTimes(f);
-  ingestSrc('github', f.events, headerOf(f));
+  if (msg.same) { applyCollectorHeader(msg.header); return; }
+  if (!validFeed(msg.feed)) return;
+  repoTimes(msg.feed);
+  ingestSrc('github', msg.feed.events, headerOf(msg.feed));
   routeSoon();
+}
+function readBeatClock() {
+  // A quiet pass rewrites this small file, not the event document. The clock still moves.
+  let st;
+  try { st = fs.statSync(GH_BEAT); } catch { return; }
+  if (!(st.size > 0) || st.size > 2 * 1024 * 1024) return;
+  if (st.mtimeMs > (collector.lastWrite || 0)) collector.lastWrite = st.mtimeMs;
+  const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
+  if (sig === collector.beatSig) return;
+  let hdr;
+  try { hdr = JSON.parse(fs.readFileSync(GH_BEAT, 'utf8')); } catch { return; }
+  if (!hdr || typeof hdr !== 'object' || Array.isArray(hdr)) return;
+  delete hdr.events;
+  collector.beatSig = sig;
+  collector.watchKilled = false;
+  applyCollectorHeader(hdr);
+}
+function readCollectorFeed() {   // every 2 s: ingest the collector's file when it changed. The parse runs off the request thread.
+  let st;
+  try { st = fs.statSync(GH_FEED); }
+  catch { readBeatClock(); return Promise.resolve(); }
+  const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
+  if (sig === collector.sig) { readBeatClock(); return Promise.resolve(); }
+  if (feedRead) { feedRead.again = true; return feedRead.promise; }
+  let resolve;
+  const promise = new Promise(r => { resolve = r; });
+  feedRead = { again: false, promise };
+  const w = new Worker(new URL('./feed-read-worker.mjs', import.meta.url), { workerData: { file: GH_FEED, prevHash: feedEventHash } });
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    w.terminate().catch(() => {});
+    const again = feedRead && feedRead.again;
+    feedRead = null;
+    resolve();
+    if (again) readCollectorFeed();
+  };
+  w.once('message', (msg) => { try { applyFeedRead(msg); } finally { finish(); } });
+  w.once('error', () => finish());
+  return promise;
 }
 // ---- Server inbox routing: after each collector pass, feed/inbox_pass.py (same rules as the box pusher:
 // routing/inbox-roles.json) routes events not seen before into seat inboxes, then postSeatLines stores them and fires
 // the SEAT_WEBHOOKS wake. State (seen / sent ids, spool) lives on the volume under $MESH_DATA_DIR/route, so an event is
-// routed once across restarts; the very first pass seeds silently (history is never delivered). A line that was
+// routed once across restarts. The first pass marks history seen and delivers only events inside the seed grace.
+// Older history is never delivered. A line that was
 // stored but not yet marked sent (crash in between) is re-posted and dropped by postSeatLines' per-seat id check.
 // The python child gets no token or secret. SERVER_ROUTING=off turns this off.
 const ROUTE_DIR = path.join(DATA_DIR, 'route');
@@ -2486,6 +2766,7 @@ async function routeOnce(script) {
     if (s.code !== 0) { console.log('route: sent failed (' + s.code + ')'); return; }
     if (Number(u.out) < 500) break;
   }
+  ackGreenCi();
   route.passes++; route.last = new Date().toISOString();
   console.log(`route: pass ${p.out}`);
 }
@@ -2497,6 +2778,12 @@ async function routePass() {
   try { do { route.again = false; await routeOnce(script); } while (route.again); }
   catch (e) { console.log('route: ' + redactRepos(String(e.message)).slice(0, 80)); }
   finally { route.busy = false; }
+}
+function ackGreenCi() {
+  const events = githubEvents();
+  for (const seat of Object.keys(seatInbox)) {
+    for (const id of idsToAck(seatInbox[seat], events)) ackLines(seat, id);
+  }
 }
 function routeSoon() { if (process.env.SERVER_ROUTING !== 'off') routePass(); }
 function jiraScript() {
@@ -2819,23 +3106,42 @@ loadActivity();
 for (const l of activity.slice(-500)) if (Date.now() - Date.parse(l.t_ct || '') < 86400000) activityEvent(l, { replay: true });
 loadPersistedWakes();
 activityReady = true;
-function loadPersistedWakes() {   // last wake per seat survives a restart (wakes.jsonl is append-only)
-  const last = new Map();
-  for (const row of readWakeRows(STATE_DIR)) if (row && row.seat) last.set(String(row.seat), row);
-  for (const [seat, row] of last) {
+function legacyWake409(row) {
+  return !!row && (row.outcome == null || row.outcome === '') && row.error === 'http_409';
+}
+// Last row that is not a noop skip. A legacy http_409 (no outcome) is ambiguous, so a trailing one falls back to the earlier row. All-legacy-409 stays fail. The file is not rewritten.
+function keptWakeBySeat(rows) {
+  const kept = new Map();
+  const prior = new Map();
+  for (const row of rows) {
+    if (!row || !row.seat || row.outcome === 'skipped') continue;
+    const seat = String(row.seat);
+    if (legacyWake409(row)) {
+      kept.set(seat, prior.has(seat) ? prior.get(seat) : row);
+      continue;
+    }
+    prior.set(seat, row);
+    kept.set(seat, row);
+  }
+  return kept;
+}
+function loadPersistedWakes() {   // last non-skipped wake per seat survives a restart (wakes.jsonl is append-only)
+  const rows = readWakeRows(STATE_DIR);
+  for (const [seat, row] of keptWakeBySeat(rows)) {
     let st = wakeQ.get(seat);
     if (!st) { st = { lastSent: 0, pending: [], timer: null, inflight: false, status: null }; wakeQ.set(seat, st); }
     st.status = { ok: !!row.ok, attempts: Number(row.attempts) || 0, at: typeof row.t_ct === 'string' ? row.t_ct : new Date().toISOString() };
+    if (row.outcome === 'delivered' || row.outcome === 'failed') st.status.outcome = row.outcome;
     if (row.error) st.status.error = String(row.error).slice(0, 40);
     const t = Date.parse(row.t_ct || '');
     if (Number.isFinite(t)) st.lastSent = t;
-    if (row.ok && typeof row.t_ct === 'string' && !wakeOkAt[seat]) wakeOkAt[seat] = row.t_ct;
+    if (row.ok && (row.outcome == null || row.outcome === 'delivered') && typeof row.t_ct === 'string' && !wakeOkAt[seat]) wakeOkAt[seat] = row.t_ct;
   }
   let skipRows = [];
   try {
     skipRows = fs.readFileSync(path.join(STATE_DIR, 'wake-skips.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   } catch { /* no skip file yet */ }
-  restoreWakeBook(wakeState, readWakeRows(STATE_DIR), skipRows, Date.now(), wakeConfig(process.env).statMs);
+  restoreWakeBook(wakeState, rows.filter(row => row && row.outcome !== 'skipped'), skipRows, Date.now(), wakeConfig(process.env).statMs);
 }
 header = mergedHeader(); fullDirty = true;
 function clearSeatWork(f, seat) {
@@ -3013,16 +3319,16 @@ function refreshWorking(now = Date.now()) {
   if (fleet) fleet = clearClosedWork(fleet);
   const cleared = applyCloudOwners(fleet, header.cloud_agents || [], now);
   if (cleared) fleet = cleared;
+  if (fleet) fleet = bindSeatWorkToCards(fleet);
   if (fleet) header.fleet = stampClockTree(fleet);
   if (JSON.stringify((header.fleet && header.fleet.working) || {}) !== before) { seq++; fullDirty = true; }
 }
 const actHits = new Map();   // seat -> [timestamps]
-function runningCloudForHead(tag) {
-  if (!/^[0-9a-f]{40}$/.test(String(tag || ''))) return '';
+function runningCloudId(match) {
   let id = '';
   for (const line of activity) {
     if (!line || (line.kind !== 'cloud_agent' && line.kind !== 'agent')) continue;
-    if (line.tag !== tag) continue;
+    if (!match(line)) continue;
     const agent = typeof line.agent === 'string' ? line.agent : '';
     if (!ACT_AGENT.test(agent)) continue;
     const action = String(line.action || '');
@@ -3034,10 +3340,22 @@ function runningCloudForHead(tag) {
   if (!row || row.state !== 'running') return '';
   return row.bcId;
 }
+function runningCloudForHead(tag) {
+  if (!/^[0-9a-f]{40}$/.test(String(tag || ''))) return '';
+  return runningCloudId(line => line.tag === tag);
+}
+function runningCloudForPr(pr) {
+  const want = String(pr || '').trim();
+  if (!want) return '';
+  return runningCloudId(line => String(line.pr || '') === want);
+}
 // A finished cloud line stays here. It is not copied onto the inbox as run_end.
 function foldCloudHead(d) {
-  if (!d || (d.kind !== 'cloud_agent' && d.kind !== 'agent') || !/^[0-9a-f]{40}$/.test(d.tag || '')) return { line: d, skip: false };
-  const running = runningCloudForHead(d.tag);
+  if (!d || (d.kind !== 'cloud_agent' && d.kind !== 'agent')) return { line: d, skip: false };
+  const byTag = /^[0-9a-f]{40}$/.test(d.tag || '') ? runningCloudForHead(d.tag) : '';
+  const byPr = d.pr ? runningCloudForPr(d.pr) : '';
+  const running = byTag || byPr;
+  if (!byTag && !byPr) return { line: d, skip: false };
   if (!running || running === d.agent) return { line: d, skip: false };
   if (d.action === 'launch') return { line: { ...d, agent: running, action: 'reply' }, skip: false };
   if (d.action === 'finished' || d.action === 'finish' || d.action === 'cancel') return { line: d, skip: true };
@@ -3223,6 +3541,7 @@ async function handle(req, res) {
       transition: url.searchParams.get('transition') || '',
       since: url.searchParams.get('since') || '',
       until: url.searchParams.get('until') || '',
+      day: url.searchParams.get('day') || '',
       limit: url.searchParams.get('limit') || '',
       cursor: url.searchParams.get('cursor') || '',
     };
@@ -3232,11 +3551,15 @@ async function handle(req, res) {
       return send(req, res, 200, 'application/x-ndjson; charset=utf-8', exportTransitions(date));
     }
     if (p === '/history/transitions') return json(req, res, 200, queryTransitions(q));
-    if (p === '/history/cards') return json(req, res, 200, cardHistory(q));
+    if (p === '/history/cards') {
+      const body = cardHistory(q);
+      body.ready = historyState.ready;
+      return json(req, res, 200, body);
+    }
     const date = url.searchParams.get('date') || '';
     if (!date) return json(req, res, 200, { days: archiveDays() });
     if (!validArchiveDate(date)) return json(req, res, 400, { error: 'bad date' });
-    return json(req, res, 200, { date, events: readArchive(date, 'events').lines });
+    return json(req, res, 200, { date, events: await historyEvents(date) });
   }
   if (p === '/robots.txt' && (m === 'GET' || m === 'HEAD')) return send(req, res, 200, 'text/plain; charset=utf-8', 'User-agent: *\nDisallow: /\n');
 
@@ -3372,6 +3695,8 @@ async function handle(req, res) {
     if (sender !== 'ingest') {
       const lines = parsed && Array.isArray(parsed.lines) ? parsed.lines : [];
       const handoffId = /^handoff:([a-z0-9_.-]+\/[a-z0-9_.-]+)#([1-9]\d{0,6}):(ready|critic_fail|live_pass|merge|ci_fail):([0-9a-f]{7,64})$/;
+      const stationId = /^nudge:station:([a-z0-9-]{2,16}):(\d{4}-\d{2}-\d{2}T\d{2})$/;
+      const stationSentence = 'Run station and re-read OP-PROC';
       const ownHandoff = (line) => {
         if (!line || typeof line !== 'object' || Array.isArray(line)) return false;
         if (canonSeat(line.from) !== sender || line.type !== 'packet') return false;
@@ -3383,8 +3708,22 @@ async function handle(req, res) {
         const lineSha = typeof line.sha === 'string' ? line.sha.trim().toLowerCase() : '';
         return idSha === lineSha;
       };
+      // One reminder shape. type stays nudge, so this is not a packet and arch1 launch stays quiet.
+      const ownStation = (line) => {
+        if (!line || typeof line !== 'object' || Array.isArray(line)) return false;
+        if (canonSeat(line.from) !== sender || line.type !== 'nudge') return false;
+        if (String(line.kind || '').toLowerCase() !== 'station') return false;
+        if (line.reason !== stationSentence || line.title !== stationSentence) return false;
+        if (line.repo !== '' || line.url !== '' || line.number !== 0) return false;
+        if (line.sha != null && line.sha !== '') return false;
+        const id = typeof line.id === 'string' ? line.id : '';
+        const hit = stationId.exec(id);
+        if (!hit || canonSeat(hit[1]) !== canonSeat(line.seat)) return false;
+        if (line.to != null && canonSeat(line.to) !== canonSeat(line.seat)) return false;
+        return true;
+      };
       if (parsed && parsed.replace === true) return json(req, res, 403, { error: 'not your handoff' });
-      if (!lines.length || lines.length > 8 || lines.some(line => !ownHandoff(line))) return json(req, res, 403, { error: 'not your handoff' });
+      if (!lines.length || lines.length > 8 || lines.some(line => !ownHandoff(line) && !ownStation(line))) return json(req, res, 403, { error: 'not your handoff' });
     }
     const r = postSeatLines(parsed, null);
     if (r.status === 200) { seq++; header = mergedHeader(); fullDirty = true; }
@@ -3411,10 +3750,15 @@ async function handle(req, res) {
     if (!who) return json(req, res, 401, { error: 'unauthorized' });
     if (!SEAT_IDS.includes(inboxM[1]) || who !== inboxM[1]) return json(req, res, 403, { error: 'inbox is not exposed' });
     const since = url.searchParams.get('since'), all = url.searchParams.get('all') === '1', stale = url.searchParams.get('stale') === '1';
+    const queue = url.searchParams.get('queue') === '1', backlog = url.searchParams.get('backlog') === '1';
     const base = since && seatInbox[who].some(l => l.id === since) ? linesAfter(seatInbox[who], since) : seatInbox[who];
-    const keep = new Set(seatOpenRows(who, stale ? false : all).map(l => l.id)); touchSeat(who);
+    const rows = seatOpenRows(who, stale ? false : all);
+    const opts = queueOpts();
+    const head = queueView(rows, opts);
+    const view = (all || stale) ? rows : (backlog ? backlogOf(rows, opts) : (queue ? head : rows));
+    const keep = new Set(view.map(l => l.id)); touchSeat(who);
     const lines = base.filter(l => keep.has(l.id) && (!stale || settledLine(l)));
-    return json(req, res, 200, { seat: who, lines: lines.slice(0, 1000) });
+    return json(req, res, 200, { seat: who, head: head.length, backlog: Math.max(0, rows.length - head.length), lines: lines.slice(0, 1000) });
   }
   if (p === '/clock') {   // POST /clock: the CoS starts the same timed run the tripwire starts (BIFROST_CLOCK_SEATS keys only)
     if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
@@ -3439,7 +3783,7 @@ async function handle(req, res) {
     if (!what) return json(req, res, 400, { error: 'id, upto, stale, or all required' });
     const review = d && typeof d.review === 'string' && d.review.length <= 300 ? d.review : '';
     const n = ackLines(who, what, review); touchSeat(who);
-    if (n === -2) return json(req, res, 400, { error: 'merge handoff needs a review url' });
+    if (n === -2) return json(req, res, 400, { error: 'merge handoff requires a review link' });
     if (n < 0) return json(req, res, 404, { error: 'no such line' });
     if (n) serverActivity(who, 'turn', 'end', 'ack');
     if (n > 0) publishHeader();   // work tracking moves the packet to acked
@@ -3619,17 +3963,134 @@ function githubFeedEvents() {
   }
 }
 backfillArchive({ inboxes: seatInbox, extraInbox: inboxLines, nudges, acks: inboxAcks, cards: bfCards, events: githubFeedEvents() });
-server.listen(PORT, () => {
-  console.log(`live mesh listening on :${server.address().port} (${PUBLIC ? 'public: no password, no masking' : 'gated'})`);
+server.on('error', (err) => {
+  console.log('live mesh listen failed: ' + (err && err.code ? err.code : 'error'));
+  process.exit(1);
+});
+const historyState = { ready: false, redis: 'off', cards: 0, loaded: false };
+let historyStore = null;
+let historyReplay = null;
+
+function noteArchive(kind, rec, day) {
+  if (historyReplay) historyReplay.push({ kind, rec, day });
+  else if (historyStore && historyState.loaded) {
+    const op = kind === 'cards' ? historyStore.putCard(rec) : kind === 'events' ? historyStore.putEvent(day, rec) : null;
+    if (op) op.catch(() => { historyState.redis = 'down'; });
+  }
+}
+
+function compactChildEnv() {
+  const env = { PATH: process.env.PATH || '', TZ: process.env.TZ || 'America/Chicago' };
+  if (process.env.MESH_CARDS_READ_MAX) env.MESH_CARDS_READ_MAX = process.env.MESH_CARDS_READ_MAX;
+  return env;
+}
+
+function runCompactChild(archiveAt) {
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'compact-cards.mjs');
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--max-old-space-size=1024', script, archiveAt], { env: compactChildEnv(), stdio: ['ignore', 'ignore', 'ignore'] });
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* already gone */ } }, 1800000);
+    child.once('exit', (code) => { clearTimeout(timer); resolve(code === 0); });
+    child.once('error', () => { clearTimeout(timer); resolve(false); });
+  });
+}
+
+async function fillHistory() {
+  const reduced = foldCardRows(reloadCardRows());
+  historyState.cards = reduced.length;
+  useCardRows(reduced);
+  await historyStore.replaceCards(reduced);
+  const days = archiveDays();
+  for (const day of days) await historyStore.replaceEvents(day, readArchive(day, 'events').lines);
+  return days.length;
+}
+
+async function drainHistory() {
+  while (historyReplay && historyReplay.length) {
+    const batch = historyReplay.splice(0, historyReplay.length);
+    for (const item of batch) {
+      try {
+        if (item.kind === 'cards') await historyStore.putCard(item.rec);
+        else if (item.kind === 'events') await historyStore.putEvent(item.day, item.rec);
+      } catch { historyState.redis = 'down'; }
+    }
+  }
+}
+
+async function warmHistory() {
+  historyReplay = [];
+  setArchiveSink(noteArchive);
+  try {
+    const archiveAt = archiveRoot();
+    if (archiveAt && oversizedCardDays(archiveAt).length) {
+      let ok = false;
+      if (process.env.MESH_COMPACT_IN_PROCESS === '1') {
+        compactOversized(archiveAt);
+        ok = true;
+      } else ok = await runCompactChild(archiveAt);
+      if (ok) adoptFoldedCards();
+    }
+    adoptCardBook();
+  } catch { /* the board stays up; oversized days stay unread */ }
+  historyState.ready = true;
+  const url = process.env.REDIS_URL || '';
+  if (!url) {
+    historyReplay = null;
+    historyState.redis = 'off';
+    return;
+  }
+  try {
+    historyStore = await openHistory(url);
+    historyState.redis = 'up';
+    const days = await fillHistory();
+    await drainHistory();
+    const reduced = foldCardRows(reloadCardRows());
+    historyState.cards = reduced.length;
+    useCardRows(reduced);
+    historyReplay = null;
+    historyState.loaded = true;
+    await historyStore.markReady({ cards: reduced.length, days });
+  } catch {
+    historyReplay = null;
+    historyState.loaded = false;
+    historyState.redis = 'down';
+  }
+}
+
+function creditHistory(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => creditCiFrom(row, CI_NODES));
+}
+
+async function historyEvents(date) {
+  if (historyStore && historyState.loaded) {
+    try {
+      const rows = await historyStore.readEvents(date);
+      if (rows) return creditHistory(rows);
+    } catch { historyState.redis = 'down'; }
+  }
+  return creditHistory(readArchive(date, 'events').lines);
+}
+
+async function openMesh() {
+  // The first read finishes before the port opens, so health and the board see the feed.
+  if (process.env.COLLECTOR !== 'off') await readCollectorFeed();
+  server.listen(PORT, '0.0.0.0', () => {
+  const bound = server.address().port;
+  const webhookBase = String(process.env.CURSOR_WEBHOOK_BASE || '');
+  if (webhookBase.endsWith(':0')) process.env.CURSOR_WEBHOOK_BASE = 'http://127.0.0.1:' + bound;
+  console.log(`live mesh listening on :${bound} (${PUBLIC ? 'public: no password, no masking' : 'gated'})`);
+  void warmHistory();
   // The stall clock starts once the port is open, so a slow bind is not a stall.
   if (process.env.COLLECTOR !== 'off') {
-    readCollectorFeed();
     setInterval(readCollectorFeed, 2000).unref();
     const watchEvery = Math.min(5000, Math.max(500, (Number(process.env.COLLECTOR_WATCH_S) || 45) * 1000));
     setInterval(watchFeed, watchEvery).unref();
     startCollector().catch(e => console.log("collector: start failed " + String(e.message).slice(0, 80)));
   }
-});
+  });
+}
+openMesh();
 process.on('SIGUSR2', () => process.exit(1));
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { stopping = true; server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); });
 readJiraFeed();

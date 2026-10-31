@@ -265,7 +265,7 @@ export function missingHandoffs({ events, lines, roles, loginToSeat, now, l1ms }
 }
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const REVIEW_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9]\d{0,6})#pullrequestreview-(\d+)$/;
+const REVIEW_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9]\d{0,6})#(pullrequestreview-\d+|issuecomment-\d+|discussion_r\d+)$/;
 
 export function isHotfixTitle(title) {
   return /^hotfix:/i.test(text(title));

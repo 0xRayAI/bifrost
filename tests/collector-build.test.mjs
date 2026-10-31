@@ -18,6 +18,7 @@ function runGuard(dir) {
 
 const SHIPPED = [
   'upstream/fetch_feed.py', 'live_mesh.py', 'inbox_pass.py', 'deploy_status.py', 'host_poll.py',
+  'feed_cap.py', 'next_parent.py', 'ci_inbox.py',
   'fleet-roster.json', 'fleet-nodes.json', 'site.json', 'routing/inbox.py', 'routing/board.py',
   'routing/inbox-roles.json', 'README.md',
 ];

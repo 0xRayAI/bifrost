@@ -16,6 +16,7 @@ sys.dont_write_bytecode = True   # never write __pycache__ into the upstream che
 SRC = os.environ.get("LIVE_MESH_SRC", str(Path(__file__).resolve().parent.parent.parent / "live-mesh"))
 sys.path.insert(0, SRC)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from feed_cap import cap_file, feed_cap, window_events, window_note  # noqa: E402
 import fetch_feed as ff  # noqa: E402
 import live_collect as uc  # noqa: E402
 import live_flow  # noqa: E402
@@ -156,6 +157,15 @@ def visible_feed_lists(services, product_nodes):
     return [s for s in services if keep(s)], sorted(n for n in product_nodes if keep(n))
 
 
+def stamp_cloud_node(product_nodes, fleet_state):
+    """CloudAgents is a product node when the fleet has a cloud object. An empty open set stays off."""
+    nodes = [n for n in (product_nodes or []) if n != "burst-live"]
+    cloud = fleet_state.get("cloud") if isinstance(fleet_state, dict) else None
+    if isinstance(cloud, dict) and "CloudAgents" not in nodes:
+        nodes.append("CloudAgents")
+    return nodes
+
+
 def board_wave(events, write, prompts=None):
     """One card pass. A miss is logged and the rest of the feed still writes."""
     try:
@@ -233,6 +243,7 @@ def build(args, gh):
         ff.SERVICES,
         [live_site.SITE["node"], *live_site.SITE["hosts"].values(), *(x["name"] for x in live_site.SITE["services"])],
     )
+    product_nodes = stamp_cloud_node(product_nodes, fleet_state)
     return {
         "title": live_site.SITE["title"],
         "sources": [f"https://github.com/{r}" for r in args.repos] + HEALTH_URLS + [MERGE_QUEUE.name],
@@ -306,21 +317,43 @@ def write(feed, out):
     return n
 
 
+def _write_beat(feed, out):
+    """Clock and header only. A quiet pass must not rewrite the event document."""
+    header = {k: v for k, v in feed.items() if k != "events"}
+    path = out.with_suffix(".beat.json")
+    tmp = path.with_suffix(f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
+    os.replace(tmp, path)
+
+
 def _write(feed, out):
     stream = out.with_suffix(".jsonl")
     seen_path = out.parent / "jsonl-seen.json"
     seen = set(json.loads(seen_path.read_text())) if seen_path.exists() else set()
     def h(e):
         return hashlib.sha1(json.dumps(e, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
-    new = [(e, h(e)) for e in feed["events"]]
-    new = [(e, k) for e, k in new if k not in seen]
+    events = list(feed.get("events") or [])
+    if MODE == "github":
+        events = window_events(events, feed_cap())
+    keys = [h(e) for e in events]
+    keyset = set(keys)
+    new = [(e, k) for e, k in zip(events, keys) if k not in seen]
+    payload = dict(feed)
+    payload["events"] = events
+    payload["event_count"] = len(events)
+    if MODE == "github":
+        payload["notes"] = window_note(payload.get("notes"), events)
+    # Railway collector: same events leave the document bytes in place. The beat still moves the clock.
+    if MODE == "github" and out.exists() and keyset == seen:
+        _write_beat(payload, out)
+        return 0
     tmp = out.with_suffix(f".json.tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(feed, ensure_ascii=False, separators=(",", ":")) + "\n")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     os.replace(tmp, out)
-    if MODE == "github":                # Railway collector: the server reads this file; no append-only archive, but the
-        if new:                         # content hashes persist on the volume so "N new" counts only new or changed events
-            tmp = seen_path.with_suffix(f".tmp.{os.getpid()}")
-            tmp.write_text(json.dumps(sorted({k for _, k in new} | {h(e) for e in feed["events"]}))); os.replace(tmp, seen_path)
+    if MODE == "github":                # no append-only archive; the content hashes persist on the volume
+        tmp = seen_path.with_suffix(f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(sorted(keyset))); os.replace(tmp, seen_path)
+        _write_beat(payload, out)
         return len(new)
     if new:
         with stream.open("a") as f:

@@ -55,7 +55,7 @@
     'critic_fail', 'critic_pass', 'ci_pass', 'ci_fail', 'issue_open', 'issue_close',
     'deploy', 'deploy_fail', 'health_ok', 'health_fail', 'probe', 'push', 'feed_push']);
   var KIND_WORD = { pr_open: 'open', pr_update: 'fix / update', merged: 'merge', pr_close: 'close',
-    supersede: 'supersede', critic_pass: 'Light PASS', critic_fail: 'Light FAIL',
+    supersede: 'supersede', critic_pass: 'Light PASS', critic_fail: 'Light FIX',
     ci_pass: 'CI pass', ci_fail: 'CI fail', review: 'review', comment: 'comment',
     issue_open: 'issue open', issue_close: 'issue close', fix: 'fix',
     deploy: 'deploy', deploy_fail: 'deploy FAIL', health_ok: '/health ok',

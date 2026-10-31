@@ -2,8 +2,9 @@
 
 Writes:    actor -> GitHub                       (PR open/edit/push, commit, comment, review, label, issue, tag)
 Merge:     actor -> GitHub -> Railway -> host    (develop -> dev.example.com, main -> app.example.com)
-CI:        GitHub -> PR author, or GitHub alone   (check runs/suites, workflow runs, non-Railway statuses; the CI
-                                                  node is folded into GitHub, color = conclusion)
+CI:        seat -> PR author, or GitHub -> PR author, or GitHub alone
+                                                  (the actor or app names the seat; otherwise the CI node stays folded
+                                                  into GitHub, color = conclusion)
 Reviewer:    Reviewer -> GitHub -> PR author
 Deploy:    Railway -> host                       (SHA only on main -> app.example.com, else dev.example.com: heuristic,
                                                   Railway's status context does not name the host)
@@ -18,6 +19,7 @@ fold into "QA"; the instance (dev / labtest / prod) and the seat (qa-one / qa-tw
 A hop list that collapses to the product node alone (a /health change) is shown as Railway -> product node.
 The page maps each name to a drawn node and skips any hop it cannot draw.
 """
+import live_collect  # noqa: E402
 import live_site  # noqa: E402
 
 H = live_site.SITE["hosts"]
@@ -69,8 +71,16 @@ class Flow:
         if k in DEPLOY_KINDS:
             return [RW, self.host(e.get("repo"), e.get("sha"))]
         if k in CI_KINDS:
+            # The actor or app names the seat. A row with neither stays a GitHub pulse.
+            seat = live_collect.ci_from_seat(e)
             a = self.pr_author(e)
-            return [GH] + ([a] if a and a not in (GH, CI) else [])
+            start = seat or GH
+            hops = [start]
+            if a and a not in (GH, CI, start, "Others"):
+                hops.append(a)
+            elif start != GH:
+                hops.append(GH)
+            return hops
         if k in CRITIC_KINDS:
             a = self.pr_author(e)
             return ["Reviewer", GH] + ([a] if a and a not in ("Reviewer", GH) else [])
@@ -81,6 +91,10 @@ class Flow:
             # The re-apply fallback above would demote that to Others, and fleet_only would drop the merge.
             merger = frm if frm not in (None, "Others") else GH
             return [merger, GH] + tail
+        if k == "next_parent":
+            # Posted as GitHub with no login. The writer fallback would mark that Others,
+            # and fleet_only would drop the doorbell before the inbox ever sees it.
+            return [GH, USM]
         if k == "op_deploy":
             return ["Operator", RW] + ([e["instance"]] if e.get("instance") else [])
         if k == "op_commit":

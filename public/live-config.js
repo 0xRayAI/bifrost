@@ -15,11 +15,18 @@
   L.fetchFeed = function (fetchFn, nowMs, mem) {
     function full() {
       return fetchFn(FEED, { cache: 'no-store' }).then(function (res) {
+        // A show-poll drops the cursor once. A server that still answers 304 is an unchanged feed, not an error.
+        if (res.status === 304) return { source: 'feed', feed: null };
         if (!res.ok) throw new Error('feed HTTP ' + res.status);
-        return res.json();
-      }).then(function (f) { mem.cursor = (f && f.cursor) || null; return { source: 'feed', feed: f }; });
+        return res.json().then(function (f) {
+          mem.cursor = (f && f.cursor) || null;
+          return { source: 'feed', feed: f };
+        });
+      });
     }
-    if (!mem.cursor) return full();
+    var unconditional = !mem.cursor || mem.force;
+    if (mem.force) mem.force = 0;
+    if (unconditional) return full();
     var url = FEED + (FEED.indexOf('?') < 0 ? '?' : '&') + 'since=' + encodeURIComponent(mem.cursor);
     return fetchFn(url, { cache: 'no-store' }).then(function (res) {
       if (res.status === 304) return { source: 'feed', feed: null };
@@ -81,7 +88,7 @@
   L.botImage = function (key) { return L.AVATAR[key] ? 'avatars/' + L.AVATAR[key] + '.png' : null; };
   var W = { lab_bug: 'lab bug', lab_bug_update: 'lab bug', lab_issue: 'lab issue', lab_run: 'lab test run',
     lab_calls: 'lab calls', board_card: 'board card', board_status: 'board', lab_retest_pass: 'lab retest PASS', lab_retest_fail: 'lab retest FAIL', critic_pass: 'reviewer PASS',
-    critic_fail: 'reviewer FAIL', critic_hold: 'reviewer HOLD', critic_recheck: 'reviewer re-check', pr_commit: 'PR push',
+    critic_fail: 'reviewer FIX', critic_hold: 'reviewer FIX (legacy HOLD)', critic_recheck: 'reviewer re-check', pr_commit: 'PR push',
     review: 'review', pr_comment: 'PR comment', issue_comment: 'issue comment', review_comment: 'review comment',
     commit: 'commit', check_run: 'check run', check_suite: 'check suite', workflow_run: 'workflow run',
     commit_status: 'status', deploy_pending: 'deploy pending', tag: 'tag', release: 'release' };
@@ -179,12 +186,76 @@
   };
   // ONE derived seat state, used by the header chip text, its dot and the canvas node alike:
   //   working (in-flight spinner) > live (a ping on the board right now) > active (fleet, last 15 min) > idle
+  // lit is working only. seen is a recent ping or a 15-minute beat, and it is not the working sheen.
   L.seatState = function (working, live, active) {
     return working ? 'working' : live ? 'live' : active ? 'active' : 'idle';
   };
   var SEAT_WORD = { working: 'WORKING', live: 'LIVE', active: 'ACTIVE', idle: 'IDLE' };
   L.seatView = function (st) {   // everything the chip and the node show, from that one state
-    return { word: SEAT_WORD[st] || 'IDLE', lit: st !== 'idle', blink: st === 'working', nodeWorking: st === 'working' };
+    return {
+      word: SEAT_WORD[st] || 'IDLE',
+      lit: st === 'working',
+      blink: st === 'working',
+      nodeWorking: st === 'working',
+      seen: st === 'live' || st === 'active'
+    };
+  };
+  // A seat quiet this long is dormant. Seven days is the named count for that class.
+  L.DORMANT_MS = 7 * 24 * 60 * 60 * 1000;
+  L.seatDormant = function (lastCt, now) {
+    var t = typeof lastCt === 'number' ? lastCt : Date.parse(lastCt || '');
+    if (!(t > 0)) return false;
+    return (now || Date.now()) - t >= L.DORMANT_MS;
+  };
+  L.workOnKey = function (raw) {
+    var m = /([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)/.exec(String(raw || '').trim());
+    return m ? m[1].toLowerCase() + '#' + m[2] : '';
+  };
+  L.cardWorkKey = function (c) {
+    if (!c) return '';
+    if (c.repo != null && c.number != null && String(c.repo)) return L.workOnKey(String(c.repo) + '#' + c.number);
+    return L.workOnKey(c.key);
+  };
+  L.seatWorkOn = function (fleet, seat) {
+    if (!fleet || !seat) return '';
+    var names = [seat, String(seat).toLowerCase()];
+    if (seat === 'blinky' || seat === 'Coord' || String(seat).toLowerCase() === 'blinky') names.push('blinky', 'Coord');
+    var working = fleet.working || {};
+    var seats = fleet.seats || {};
+    var mark = '';
+    for (var i = 0; i < names.length; i++) {
+      var row = working[names[i]];
+      if (row && row.working_on) { mark = row.working_on; break; }
+    }
+    if (!mark) {
+      for (var j = 0; j < names.length; j++) {
+        var src = seats[names[j]];
+        if (src && src.working_on) { mark = src.working_on; break; }
+      }
+    }
+    return L.workOnKey(mark);
+  };
+  L.cardInWork = function (c, fleet) {
+    var want = L.cardWorkKey(c);
+    var seat = c && (c._seat || c.seat);
+    if (!want || !seat) return false;
+    return L.seatWorkOn(fleet, seat) === want;
+  };
+  L.rosterKept = function (rows, feed) {
+    var fleet = feed && feed.fleet;
+    var seats = fleet && fleet.seats;
+    if (!seats || typeof seats !== 'object') return rows || [];
+    var keys = {};
+    Object.keys(seats).forEach(function (k) { keys[String(k).toLowerCase()] = 1; });
+    var products = {};
+    var nodes = feed.product_nodes;
+    if (Array.isArray(nodes)) nodes.forEach(function (n) { if (typeof n === 'string' && n) products[n.toLowerCase()] = 1; });
+    return (rows || []).filter(function (a) {
+      var low = String((a && a[0]) || '').toLowerCase();
+      if (!low) return false;
+      if (products[low]) return true;
+      return !!keys[low];
+    });
   };
   function freshClock(ms) {
     var m = Math.max(1, Math.round(ms / 60000));
@@ -208,20 +279,55 @@
     if (dataAge < 30 * 60000) return { tone: 'green', line: 'Last activity ' + freshClock(dataAge) + ' ago' };
     return { tone: 'amber', line: 'Last activity ' + freshClock(dataAge) + ' ago' };
   };
+  // A held card (Held: comment, GITHUB_HOLD_LABEL, or Jira JIRA_HOLD_STATUS) displays as Parked with its named blocker.
+  L.parkedLabel = function (c) {
+    var why = c && c.hold && String(c.hold.reason || '').trim();
+    return why ? 'Parked behind ' + why : 'Parked';
+  };
+  // One id for every compare. Lowercase, and a run of separators becomes one underscore.
+  // The painted word is statusName. An id outside the six columns stays visible and is flagged.
+  L.statusId = function (raw) {
+    return String(raw == null ? '' : raw).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  };
+  L.statusName = function (raw) {
+    var id = L.statusId(raw);
+    if (!id) return '';
+    return id.split('_').filter(Boolean).map(function (word) {
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    }).join(' ');
+  };
+  L.KNOWN_STATES = ['live', 'parked', 'held', 'closed', 'waiting'];
+  L.KANBAN_STAGES = ['open', 'review', 'fix', 'merge', 'retest', 'done'];
+  L.statusFlagged = function (raw) {
+    var id = L.statusId(raw);
+    if (!id) return false;
+    if (L.KANBAN_STAGES.indexOf(id) >= 0) return false;
+    if (L.KNOWN_STATES.indexOf(id) >= 0) return false;
+    return true;
+  };
   L.cardBucket = function (c) {
     if (!c) return 'waiting';
-    if (c.state === 'parked') return 'parked';
-    if (c.state === 'closed' || c.stage === 'done') return 'done';
-    if (c.state === 'held') return 'held';
-    if (c.stage === 'review') return 'review';
+    var state = L.statusId(c.state);
+    var stage = L.statusId(c.stage);
+    if (state === 'parked') return 'parked';
+    if (state === 'closed' || stage === 'done') return 'done';
+    if (state === 'held') return 'held';
+    if (stage === 'review') return 'review';
     return 'waiting';
   };
-  L.KANBAN_STAGES = ['open', 'review', 'fix', 'merge', 'retest', 'done'];
+  L.cardsForStatus = function (cards, filter) {
+    var id = L.statusId(filter);
+    if (!id) return [];
+    return (cards || []).filter(function (c) {
+      return !!c && (L.statusId(c.stage) === id || L.statusId(c.state) === id);
+    });
+  };
   L.kanbanColumn = function (c) {
     if (!c) return 'open';
-    if (c.state === 'closed' || c.stage === 'done') return 'done';
-    var stage = String(c.stage || 'open');
-    return L.KANBAN_STAGES.indexOf(stage) >= 0 ? stage : 'open';
+    var state = L.statusId(c.state);
+    var stage = L.statusId(c.stage) || 'open';
+    if (state === 'closed' || stage === 'done') return 'done';
+    return stage;
   };
   L.cardGithubUrl = function (c) {
     if (!c) return '';

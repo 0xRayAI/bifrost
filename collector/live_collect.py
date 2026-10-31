@@ -11,6 +11,7 @@ from pathlib import Path
 
 import live_packet
 import live_site
+import next_parent
 
 API = "https://api.github.com"
 REST_FLOOR = int(os.environ.get("LIVE_REST_FLOOR", "1500"))   # leave this much core budget for the fleet
@@ -57,7 +58,8 @@ def ci_result_kind(conclusion, status) -> str | None:
     if word in CI_FAIL:
         return "ci_fail"
     return None
-CRITIC_RE = re.compile(r"^\*\*Reviewer(?:: (PASS|FAIL|HOLD)\b| re-check:\s*(?:\**\s*)?(PASS|FAIL)?\b)")
+# Verdicts are PASS or FIX (4.1.4). FAIL and HOLD are legacy words, still read so old comments parse; both mean FIX.
+CRITIC_RE = re.compile(r"^\*\*Reviewer(?:: (PASS|FIX|FAIL|HOLD)\b| re-check:\s*(?:\**\s*)?(PASS|FIX|FAIL)?\b)")
 MENTION_RE = re.compile(r"(?<![\w`/.])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?)(?![\w-])")
 
 
@@ -69,6 +71,14 @@ def mentions(body: str | None) -> list | None:
 
 
 SHA_RE = re.compile(r"@\s*`?([0-9a-f]{7,40})\b")
+
+
+def commit_sha(value):
+    """The review's own commit, 7 to 40 hex digits. A missing or short value is not a head."""
+    if not isinstance(value, str):
+        return None
+    got = value.strip()
+    return got if re.fullmatch(r"[0-9a-fA-F]{7,40}", got) else None
 NODE = {"builder-app[bot]": "Builder", "reviewer-app[bot]": "Reviewer", "reviewer-app": "Reviewer", "ops-app[bot]": "Operator",
         "lead-alt": "Lead", "lead-login": "Lead", "github-actions[bot]": "CI"}   # a person can have several logins
 # Per-fleet login -> node map, merged over the template defaults: LIVE_NODE_MAP='{"forge0x1[bot]":"forge"}'
@@ -155,6 +165,35 @@ CREDIT_ALIAS = {"ci": "github", "github": "github", "blaze0x1": "Blaze", "blaze"
 LOGIN_KEYS = ("actor", "author", "sender", "triggering_actor", "merged_by", "user")
 
 
+_CI_FROM_SKIP = frozenset({"", "Others", "GitHub", "CI", "Example"})
+
+
+def ci_from_seat(event) -> str | None:
+    """Seat for a CI row's from/who. The actor wins, then the app slug (with and without [bot]).
+
+    An unmapped login (cursor[bot], github-actions) stays None so the row keeps GitHub or CI
+    and is not dropped. #492 only rewrote from=Others."""
+    if not isinstance(event, dict):
+        return None
+    logins: list[str] = []
+    for key in ("actor", "author", "sender", "triggering_actor"):
+        val = event.get(key)
+        if isinstance(val, str) and val.strip():
+            logins.append(val.strip())
+    app = event.get("app")
+    if isinstance(app, str) and app.strip():
+        slug = app.strip()
+        logins.append(slug)
+        if not slug.lower().endswith("[bot]"):
+            logins.append(slug + "[bot]")
+    for login in logins:
+        mapped = node(login)
+        if mapped in _CI_FROM_SKIP or mapped == live_site.SITE["node"]:
+            continue
+        return mapped
+    return None
+
+
 def node(login: str | None) -> str:
     """Mesh node for an actor. Unknown actors (e.g. Tester's new App) are kept as 'Others' + actor=login.
     A git author whose name is a seat (no User login) is that seat, not Others."""
@@ -167,6 +206,12 @@ def node(login: str | None) -> str:
     if low.startswith("git:") and low[4:] in SEAT_GIT_NAMES:   # a GitHub login is never a seat by name
         return low[4:]
     return "Others" if login else "GitHub"
+
+
+def shown_from(login):
+    """An open card is a target. An author outside the fleet is GitHub, so put() keeps the card."""
+    who = node(login) if login else "GitHub"
+    return "GitHub" if who == "Others" else who
 
 
 def gql_login(actor) -> str | None:
@@ -249,6 +294,25 @@ def prompt_stamp(body):
     return found.group(1) if found else ""
 
 
+BC_ID_RE = re.compile(
+    r"\bbc-(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{8,12})\b", re.I)
+
+
+def cloud_ids_in(text) -> list[str] | None:
+    """Cloud agent ids in a PR body. The body itself is not stored."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in BC_ID_RE.finditer(str(text or "")):
+        cid = match.group(0).lower()
+        if cid in seen:
+            continue
+        seen.add(cid)
+        found.append(cid)
+        if len(found) == 8:
+            break
+    return found or None
+
+
 def card_fields(x) -> dict:
     """Board card fields from a PR / issue object this pass already fetched: branded title, state, labels and
     the packet block (sanitized, <= 200 chars a field). The body itself is discarded here, never stored.
@@ -260,6 +324,9 @@ def card_fields(x) -> dict:
               "fixes": closing_numbers(body, x.get("number"))}
     if live_packet.carries(body):
         fields["packet_file"] = True
+    ids = cloud_ids_in(body)
+    if ids:
+        fields["bc_ids"] = ids
     pid = prompt_stamp(body)
     if pid:
         fields["prompt"] = pid
@@ -448,7 +515,7 @@ Q_PRS = """query($owner:String!,$name:String!,$after:String){ rateLimit{cost rem
  repository(owner:$owner,name:$name){ pullRequests(first:10, after:$after, orderBy:{field:CREATED_AT, direction:ASC}){
   totalCount pageInfo{hasNextPage endCursor} nodes{ number
    commits(first:40){ totalCount nodes{ commit{ %s } } }
-   reviews(first:60){ totalCount nodes{ databaseId state submittedAt url author{login __typename} } } } } } }""" % COMMIT_FIELDS
+   reviews(first:60){ totalCount nodes{ databaseId state submittedAt url author{login __typename} commit{ oid } } } } } } }""" % COMMIT_FIELDS
 
 
 class RepoCollector:
@@ -477,6 +544,12 @@ class RepoCollector:
                         e["from"] = "CI" if mapped == "Others" else mapped
                 else:
                     e["from"] = node(login)
+            # #492 stopped at from=Others. A CI row already stored as GitHub or CI still shows that
+            # node. The actor or the app names the seat (forge0x1[bot] -> forge). cursor[bot] does not.
+            if e.get("kind") in CI_KINDS and e.get("from") in ("GitHub", "Example", "CI", live_site.SITE["node"]):
+                seat = ci_from_seat(e)
+                if seat:
+                    e["from"] = seat
             if e.get("from") == "Others" and CLOUD_AGENT_RE.match(str(e.get("actor") or e.get("author") or "")):
                 e["from"] = "CloudAgents"   # cloud-agent writes stored before the Cloud agents node existed
             # A merge is a fact about the pull. An unmapped merger (cursor[bot] -> Others) must not drop it.
@@ -537,6 +610,12 @@ class RepoCollector:
                 e[k] = v
         self._index_sha(e)
         e["credit"] = self.credit_of(e)
+        if kind in CI_KINDS:
+            seat = ci_from_seat(e)
+            if seat:
+                e["from"] = seat
+                if e.get("to") == seat:
+                    e["to"] = "GitHub"
         self.ev[eid] = e
 
     def _index_sha(self, e):   # sha -> (commit author login, Seat: trailer) for check / workflow / deploy fallbacks
@@ -744,8 +823,9 @@ class RepoCollector:
                     self.ci_from_commit_node(cm)
                     self.st["ci"][cm["oid"]]["pr"] = n
                 for r in p["reviews"]["nodes"]:
+                    commit = r.get("commit") if isinstance(r.get("commit"), dict) else {}
                     self.review_event(n, r["databaseId"], r["state"], r.get("submittedAt"), gql_login(r.get("author")),
-                                      r.get("url"))
+                                      r.get("url"), commit.get("oid"))
                 need = p["commits"]["totalCount"] > len(p["commits"]["nodes"]) or \
                     p["reviews"]["totalCount"] > len(p["reviews"]["nodes"])
                 if need:   # page the rest through REST
@@ -772,12 +852,20 @@ class RepoCollector:
                  f"{self.short} #{n} push {sha[:7]} · {m}", f"https://github.com/{self.repo}/pull/{n}/commits/{sha}",
                  n, sha=sha, message=m, author=login, seat_trailer=seat_trailer(msg))
 
-    def review_event(self, n, rid, state, t, login, url):
+    def review_event(self, n, rid, state, t, login, url, posted_sha=None):
+        """Store the review on the commit it was posted on. Never the PR's current head."""
         if not t or state == "PENDING":
             return
-        self.put(f"{self.repo}#{n}:review:{rid}", t, node(login), self.pr_node(n), "review",
+        eid = f"{self.repo}#{n}:review:{rid}"
+        sha = commit_sha(posted_sha)
+        if not sha:
+            prev = self.ev.get(eid)
+            sha = commit_sha(prev.get("sha")) if isinstance(prev, dict) else None
+        pr = (self.st.get("prs") or {}).get(str(n), {})
+        pr_author = pr.get("author") if isinstance(pr, dict) else None
+        self.put(eid, t, node(login), self.pr_node(n), "review",
                  f"{login or '?'} {state.lower()} · {self.short} #{n}", url or f"https://github.com/{self.repo}/pull/{n}",
-                 n, state=state, actor=login, sha=(self.st.get("prs") or {}).get(str(n), {}).get("head"))
+                 n, state=state, actor=login, pr_author=pr_author, sha=sha)
 
     # ---------------------------------------------------------------- incremental (REST)
     def pr_merged(self, n):
@@ -847,7 +935,7 @@ class RepoCollector:
         url = p.get("html_url") or f"https://github.com/{self.repo}/pull/{n}"
         created = p.get("created_at") or p.get("updated_at")
         base = (p.get("base") or {}).get("ref") if isinstance(p.get("base"), dict) else None
-        self.put(eid, created, node(login) if login else "GitHub", "GitHub", "pr_open",
+        self.put(eid, created, shown_from(login), "GitHub", "pr_open",
                  f"{self.short} #{n} opened · {p.get('title') or ''}", url, n,
                  base=base, actor=login or None, sha=head, head_ref=head_ref, author=login or None,
                  draft=p.get("draft"), mentions=mentions(p.get("body")), **card_fields(p))
@@ -906,6 +994,13 @@ class RepoCollector:
             self.st["bf"]["merged:day"] = True
         elif not self.st["bf"].get("merged:day"):
             self.st["bf"]["merged:day"] = True
+        # One-time: pulls updated before bc ids were copied off the body never stored them.
+        # Rewind a week so a cloud row can match the PR footer or the head ref. put() is idempotent.
+        bc_rewalk = not self.st["bf"].get("bc:body")
+        if cur and bc_rewalk:
+            back = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            cur = min(cur, back)
+            self.st["etags"].pop("pulls", None)
         # One-time: merges whose actor maps to Others were dropped by put(). Rewalk the open window.
         # merged:actor is that rewalk's cursor. A short pass (page cap or error) must not set it,
         # or the next pass will not rewind and a merge behind the new pulls cursor is skipped for good.
@@ -914,7 +1009,14 @@ class RepoCollector:
             back = (datetime.now(timezone.utc) - timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%SZ")
             cur = min(cur, back)
             self.st["etags"].pop("pulls", None)
-        newest = cur
+        # Stop walks the whole list. The stored cursor stays until a strictly newer update,
+        # so a same-instant +00:00 stamp does not replace the Z form.
+        walk_from = cur
+        cards_rewalk = not self.st["bf"].get("cards:pulls")
+        if cards_rewalk:
+            cur = None
+            self.st["etags"].pop("pulls", None)
+        newest = walk_from
         # Replay a pull that shares the cursor second. put() is idempotent.
         # Instant compare, not text: <= skips that sibling, and +00:00 / -05:00 sort before Z.
         for p in self.paged(c, f"/repos/{self.repo}/pulls", {"state": "all", "sort": "updated", "direction": "desc"},
@@ -935,7 +1037,7 @@ class RepoCollector:
             fields = card_fields(p)
             if not fields.get("packet_file") and head and packet_file_on_ref(c, self.repo, head):
                 fields["packet_file"] = True
-            self.put(f"{self.repo}#{n}:open", p["created_at"], node(login) if login else "GitHub", "GitHub", "pr_open",
+            self.put(f"{self.repo}#{n}:open", p["created_at"], shown_from(login), "GitHub", "pr_open",
                      f"{self.short} #{n} opened · {p['title']}", url, n, base=p["base"]["ref"], actor=login or None,
                      sha=head, head_ref=head_ref, author=login or None,
                      draft=p.get("draft"), mentions=mentions(p.get("body")), **fields)
@@ -955,6 +1057,7 @@ class RepoCollector:
                     self.st.setdefault("need_merger", {})[str(n)] = 1
                 self.put(f"{self.repo}#{n}:merged", p["merged_at"], node(merger or login), "GitHub", "merged",
                          f"merged {self.short} #{n} → {p['base']['ref']}", url, n, **extra)
+                self._put_parent_door(c, n, p.get("merged_at"), url, p.get("body"))
             if prev_head and head and prev_head != head:
                 self.pr_commit_event(n, head, p["updated_at"], p.get("title") or "", login)
                 self.st.setdefault("enrich", {})[str(n)] = True
@@ -967,13 +1070,18 @@ class RepoCollector:
             self.st["etags"]["pulls"] = self._etag_new
         if actor_rewalk and getattr(self, "_paged_status", None) == "done":
             self.st["bf"]["merged:actor"] = True
+        if cards_rewalk and getattr(self, "_paged_status", None) == "done":
+            self.st["bf"]["cards:pulls"] = True
+        if bc_rewalk and getattr(self, "_paged_status", None) == "done":
+            self.st["bf"]["bc:body"] = True
+        self._backfill_parent_doors(c)
 
     def enrich_prs(self, c, limit=20):
         todo = list(self.st.get("enrich", {}).keys())[:limit]
         for n in todo:
             for r in self._all(c, f"/repos/{self.repo}/pulls/{n}/reviews"):
                 self.review_event(int(n), r["id"], r["state"], r.get("submitted_at"), (r.get("user") or {}).get("login"),
-                                  r.get("html_url"))
+                                  r.get("html_url"), r.get("commit_id"))
             for cm in self._all(c, f"/repos/{self.repo}/pulls/{n}/commits"):
                 d = cm["commit"]["committer"]["date"]
                 self.pr_commit_event(int(n), cm["sha"], d, cm["commit"]["message"], rest_author_login(cm))
@@ -1016,6 +1124,101 @@ class RepoCollector:
             "body": iss.get("body"),
             "labels": iss.get("labels"),
         })
+
+    def _issue_brief(self, c, number):
+        try:
+            st, data, _, _ = c.rest(f"/repos/{self.repo}/issues/{number}", None, essential=False)
+        except RateLow:
+            raise
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError):
+            return None
+        if st != 200 or not isinstance(data, dict):
+            return None
+        state = str(data.get("state") or "").lower()
+        if state == "closed" or data.get("merged_at") or str(data.get("pull_request", {}).get("merged_at") or ""):
+            state = "closed" if state == "closed" or data.get("merged_at") else state
+        text = data.get("body") if isinstance(data.get("body"), str) else ""
+        return {"state": "closed" if state == "closed" or data.get("merged_at") else state or "open", "body": text}
+
+    def _parent_door(self, c, body):
+        """One ready line's fields when a merged pull names an open parent. The body is not stored.
+        A child counts only when that issue is still open."""
+        refs = next_parent.ref_numbers(body)[:3]
+        if not refs or not getattr(c, "token", None):
+            return {}
+        briefs = {}
+        def brief(n):
+            if n not in briefs:
+                briefs[n] = self._issue_brief(c, n)
+            return briefs[n]
+        bodies = {}
+        done = set()
+        open_nums = set()
+        for n in refs:
+            info = brief(n)
+            if not info:
+                continue
+            bodies[n] = info["body"]
+            if info["state"] == "closed":
+                done.add(n)
+            else:
+                for cand in next_parent.child_numbers(info["body"])[:8]:
+                    if cand in done or cand == n:
+                        continue
+                    child = brief(cand)
+                    if not child:
+                        continue
+                    if child["state"] == "closed":
+                        done.add(cand)
+                        continue
+                    open_nums.add(cand)
+                    break
+        door = next_parent.parent_door(bodies, done, open_nums)
+        if not door:
+            return {}
+        return {"parent": door["parent"], "next_issue": door["next"], "door_seat": door["seat"]}
+
+    def _put_parent_door(self, c, number, _when, url, body):
+        door = self._parent_door(c, body)
+        if not door:
+            return
+        # Parent is in the id. A closed parent that keeps the same child is a new row,
+        # or the inbox seen-set keeps the old title.
+        eid = f"{self.repo}#{int(number)}:next:{door['parent']}:{door['next_issue']}:door"
+        prefix = f"{self.repo}#{int(number)}:next:"
+        for key in list(self.ev):
+            if str(key).startswith(prefix) and str(key) != eid:
+                self.ev.pop(key, None)
+        current = self.ev.get(eid)
+        if current and current.get("parent") == door["parent"] and current.get("next_issue") == door["next_issue"]:
+            return
+        # Stamp now. A merge time older than the route window is marked seen and never delivered.
+        live = datetime.now(self.CT).isoformat(timespec="seconds")
+        self.put(eid, live, "GitHub", "GitHub", "next_parent",
+                 f"next on #{door['parent']}: #{door['next_issue']}", url, door["next_issue"], **door)
+
+    def _backfill_parent_doors(self, c, limit=5):
+        """Recent merged pulls get one next line.
+        A stored :door is recomputed. door:child does not keep a closed parent."""
+        if not getattr(c, "token", None):
+            return
+        merged = [e for e in self.ev.values() if e.get("kind") == "merged" and e.get("repo") == self.repo and e.get("number")]
+        merged.sort(key=lambda e: str(e.get("t_ct") or ""), reverse=True)
+        seen = 0
+        for e in merged:
+            if seen >= limit:
+                return
+            n = int(e["number"])
+            seen += 1
+            try:
+                st, data, _, _ = c.rest(f"/repos/{self.repo}/pulls/{n}", None, essential=False)
+            except RateLow:
+                raise
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError):
+                continue
+            if st != 200 or not isinstance(data, dict):
+                continue
+            self._put_parent_door(c, n, e.get("t_ct"), data.get("html_url") or e.get("source"), data.get("body"))
 
     def _record_merged_event(self, n, e, actor, url):
         """Store the merged beat from an issue event when pulls have not stored merged_at yet."""
@@ -1145,9 +1348,69 @@ class RepoCollector:
         if self._etag_new:
             self.st["etags"]["ievents"] = self._etag_new
 
+    def _put_open_card(self, item):
+        """Store one fetched issue or pull. The login stays on the actor. from is the fleet node or GitHub."""
+        if not isinstance(item, dict) or item.get("number") is None:
+            return
+        try:
+            n = int(item["number"])
+        except (TypeError, ValueError):
+            return
+        user = item.get("user") if isinstance(item.get("user"), dict) else {}
+        login = user.get("login") or ""
+        is_pr = "pull_request" in item
+        eid = f"{self.repo}#{n}:open" if is_pr else f"{self.repo}!{n}:open"
+        if eid in self.ev:
+            return
+        created = item.get("created_at") or item.get("updated_at")
+        kind = "pull" if is_pr else "issues"
+        url = item.get("html_url") or f"https://github.com/{self.repo}/{kind}/{n}"
+        title = item.get("title") or ""
+        label = (f"{self.short} #{n} opened · {title}" if is_pr
+                 else f"{self.short} issue #{n} opened · {title}")
+        if login and not is_pr:
+            self.st.setdefault("issues", {})[str(n)] = login
+        self.put(eid, created, shown_from(login), "GitHub", "pr_open" if is_pr else "issue_open",
+                 label, url, n, actor=login or None, mentions=mentions(item.get("body")),
+                 author=login or None, **card_fields(item))
+
+    def backfill_open_cards(self, c, limit=30):
+        """Each pass fetches open numbers that still have no open event, up to limit. An empty miss list does not latch."""
+        bf = self.st.setdefault("bf", {})
+        bf.pop("cards:missing", None)
+        if not getattr(c, "token", None):
+            return
+        found = open_numbers(c, [self.repo])
+        key = str(self.repo).lower()
+        if key not in found:
+            return
+        missing = [n for n in sorted(found[key])
+                   if f"{self.repo}!{n}:open" not in self.ev and f"{self.repo}#{n}:open" not in self.ev]
+        if not missing:
+            return
+        for n in missing[:limit]:
+            try:
+                st, data, _, _ = c.rest(f"/repos/{self.repo}/issues/{n}", None, essential=False)
+            except RateLow:
+                return
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError):
+                return
+            if st != 200 or not isinstance(data, dict):
+                return
+            self._put_open_card(data)
+            if f"{self.repo}!{n}:open" not in self.ev and f"{self.repo}#{n}:open" not in self.ev:
+                return
+
     def poll_issues(self, c):
         cur = self.st["cur"].get("issues")
-        newest = cur
+        # One walk of every issue. The time cursor skips a number that was not updated after it,
+        # and that number never becomes a card. put() is idempotent.
+        stored = cur
+        cards_rewalk = not self.st["bf"].get("cards:issues")
+        if cards_rewalk:
+            cur = None
+            self.st["etags"].pop("issues", None)
+        newest = stored
         for i in self.paged(c, f"/repos/{self.repo}/issues", {"state": "all", "sort": "updated", "direction": "desc"},
                             "issues", stop=lambda i: gh_before(i.get("updated_at"), cur)):
             if gh_after(i.get("updated_at"), newest):
@@ -1157,12 +1420,14 @@ class RepoCollector:
             n, login = i["number"], (i.get("user") or {}).get("login")
             if login:
                 self.st.setdefault("issues", {})[str(n)] = login
-            self.put(f"{self.repo}!{n}:open", i["created_at"], node(login), "GitHub", "issue_open",
+            self.put(f"{self.repo}!{n}:open", i["created_at"], shown_from(login), "GitHub", "issue_open",
                      f"{self.short} issue #{n} opened · {i['title']}", i["html_url"], n, actor=login,
                      mentions=mentions(i.get("body")), **card_fields(i))
         self.st["cur"]["issues"] = newest
         if self._etag_new:
             self.st["etags"]["issues"] = self._etag_new
+        if cards_rewalk and getattr(self, "_paged_status", None) == "done":
+            self.st["bf"]["cards:issues"] = True
 
     def poll_comments(self, c):
         cur = self.st["cur"].get("comments")
@@ -1189,12 +1454,14 @@ class RepoCollector:
             hold = live_packet.parse_hold(body)
             k = "pr_comment" if is_pr else "issue_comment"
             to = self.pr_node(n) if is_pr else self.issue_node(n)
+            packet = live_packet.parse(body) or None
             self.put(f"{self.repo}{'#' if is_pr else '!'}{n}:comment:{cm['id']}", cm["created_at"], node(login), to, k,
                      f"{login or '?'} comment · {self.short} {'#' if is_pr else 'issue #'}{n}", cm["html_url"], n,
                      actor=login, resolved=True if RESOLVED_RE.search(body) else None,   # flags only
                      parked=True if PARKED_COMMENT_RE.match(body) else None,
                      start_after=comment_start_after(body),
-                     hold=hold, mentions=mentions(body), pr_merged=self.pr_merged(n) if is_pr else None)
+                     hold=hold, mentions=mentions(body), packet=packet,
+                     pr_merged=self.pr_merged(n) if is_pr else None)
             if is_pr:
                 self.st.setdefault("enrich", {})[str(n)] = True   # a comment is a reason to re-read reviews
             if is_pr and login in CRITIC_LOGINS:   # verdict word + SHA only; the body is discarded here
@@ -1213,7 +1480,7 @@ class RepoCollector:
             self.st["etags"]["comments"] = self._etag_new
         for n, v in self.st["reviewer"].items():   # latest verdict per PR, stable id
             word = v["result"] or v["verdict"]
-            kind = {"PASS": "critic_pass", "FAIL": "critic_fail", "HOLD": "critic_hold"}.get(word, "critic_recheck")
+            kind = {"PASS": "critic_pass", "FIX": "critic_fail", "FAIL": "critic_fail", "HOLD": "critic_fail"}.get(word, "critic_recheck")
             shown = (f"re-check {v['result']}" if v["result"] else "re-check") if v["verdict"] == "RE-CHECK" else v["verdict"]
             self.put(f"{self.repo}#{n}:reviewer", v["t"], "Reviewer", self.pr_node(n), kind,
                      f"reviewer {shown} · {self.short} #{n}" + (f" @ {v['sha'][:7]}" if v["sha"] else ""), v["url"], n,
@@ -1327,7 +1594,7 @@ class RepoCollector:
                              r.get("updated_at") or r.get("run_started_at") or r["created_at"], "CI", "GitHub", ck,
                              f"{'CI pass' if ck == 'ci_pass' else 'CI fail'} {brand(r['name'])} · {self.short} #{num}",
                              r["html_url"], int(num), conclusion=r.get("conclusion"), head_sha=r.get("head_sha"),
-                             name=brand(r["name"]))
+                             name=brand(r["name"]), actor=(r.get("actor") or {}).get("login"))
                 if NO_CHECKS and r.get("check_suite_id"):
                     self.suite_from_run(r)
                 recent = r.get("head_sha") and time.time() - datetime.fromisoformat(
@@ -1461,7 +1728,8 @@ class RepoCollector:
     # ---------------------------------------------------------------- one pass
     def run(self, c, deadline):
         self._denied = None
-        steps = [("pulls", self.poll_pulls), ("issues", self.poll_issues), ("issue events", self.poll_issue_events),
+        steps = [("pulls", self.poll_pulls), ("issues", self.poll_issues),
+                 ("open cards", self.backfill_open_cards), ("issue events", self.poll_issue_events),
                  ("merger backfill", self.backfill_mergers),
                  ("comments", self.poll_comments), ("review comments", self.poll_review_comments),
                  ("pushes", self.poll_pushes),

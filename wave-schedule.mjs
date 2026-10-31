@@ -43,6 +43,26 @@ export function cardKey(card) {
   return '';
 }
 
+/** Pulls and cloud runs that do not name a card already on the board. */
+export function missingCardRuns(runs, cards) {
+  const keys = new Set((Array.isArray(cards) ? cards : []).map(cardKey).filter(Boolean));
+  const gaps = [];
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (!run || typeof run !== 'object') continue;
+    const kind = String(run.kind || (run.bcId ? 'cloud' : ''));
+    if (kind === 'pr_open' || kind === 'pull') {
+      const key = cardKey({ repo: run.repo, number: run.number });
+      if (!key || !keys.has(key)) gaps.push({ kind: 'pull', key });
+      continue;
+    }
+    if (kind === 'cloud' || run.bcId) {
+      const named = String(run.card || '').trim().toLowerCase();
+      if (!named || !keys.has(named)) gaps.push({ kind: 'cloud', key: named });
+    }
+  }
+  return gaps;
+}
+
 export function isPlanCard(card) {
   return !!(card && (card.kind === 'plan' || card.title === PLAN_TITLE));
 }

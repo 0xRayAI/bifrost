@@ -386,12 +386,12 @@ main > header {
   margin-bottom: 8px;
   padding-bottom: 8px;
 }
-main > header .mesh-controls {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  margin: 8px 0 0;
-  padding: 8px 10px;
+#meshPanel .mesh-controls {
+  flex: none;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  background: transparent;
 }
 .status b[title] { cursor: help; }
 header h1 span { color: var(--dim); font-size: 13px; font-weight: 400; letter-spacing: 0; margin-left: 8px; }
@@ -404,6 +404,9 @@ header h1 span { color: var(--dim); font-size: 13px; font-weight: 400; letter-sp
 .seat { display: inline-flex; gap: 8px; align-items: center; width: max-content; max-width: 16rem; flex: none; min-width: 0; }
 button.seat { background: transparent; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .seat.idle { opacity: .45; }
+.seat.seen { opacity: 1; }
+.seat.dormant { opacity: .35; }
+.seat.dormant .nm { font-style: italic; }
 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--dot-off); flex: none; }
 .seat .nm { min-width: 0; max-width: 8rem; flex: 0 1 auto; font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--nm)); }
 /* The working label's sheen, on the roster name: dim seat color with a full-color band sweeping left to right while .live (seatView.lit). 1.2s is the old canvas travel. */
@@ -427,7 +430,13 @@ button.seat { background: transparent; border: 0; padding: 0; color: inherit; fo
 #headTime { color: var(--dim); font-size: 12px; font-family: "JetBrains Mono", ui-monospace, monospace; }
 canvas { display: block; width: 100%; height: auto; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-#meshPanel { display: flex; flex-direction: column; }
+#meshPanel { display: flex; flex-direction: column; height: 720px; max-height: 720px; overflow: hidden; min-height: 0; }
+#seats { flex: 0 1 auto; max-height: 8.5rem; min-height: 0; display: flex; flex-direction: column; margin: 0; background: transparent; border: 0; padding: 0; }
+#seats > .fold-head { flex: none; }
+#seats > .fold-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+#statsFold { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 8px; padding: 0 8px; background: transparent; }
+#statsFold:not(.collapsed) { background: var(--stat-bg); }
+#kanban { margin-top: 12px; }
 .mesh-legend { color: var(--dim); font-size: 11px; margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .mesh-legend span { border-bottom: 1px dotted var(--dim); cursor: help; }
 .spectrum-pill { display: inline-block; flex: none; font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 3px 8px; border-radius: 999px;
@@ -437,9 +446,8 @@ canvas { display: block; width: 100%; height: auto; }
 .spectrum-meter i { display: block; width: 3px; border-radius: 1px; }
 @media (prefers-reduced-motion: reduce) { .spectrum-meter i { transition: none; } }
 main { max-width: 1560px; }
-.split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-.split-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.split > .panel, .split-main > .panel { margin: 0; min-width: 0; }
+.split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.split > .panel { margin: 0; min-width: 0; }
 #agentPing[hidden], #agentPing:empty { display: none; }
 .wave { display: flex; flex-direction: column; height: 720px; max-height: 720px; overflow: hidden; isolation: isolate; }
 .wave-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
@@ -472,6 +480,7 @@ button.wstat.on { outline: 2px solid var(--focus); background: var(--panel); }
 .wbadge.nudge { border-color: var(--badge-nudge-edge); color: var(--badge-nudge-fg); }
 .wbadge.pin { border-color: var(--badge-pin-edge); color: var(--badge-pin-fg); }
 .wbadge.held { border-color: var(--badge-held-edge); color: var(--badge-held-fg); }
+.wbadge.raci { border-color: var(--fresh-amber); color: var(--fresh-amber); }
 .wbadge.state { border-color: var(--line); color: var(--text); }
 .wspin { width: 8px; height: 8px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--spin); border-right-color: transparent; display: inline-block; animation: wspin .8s linear infinite; flex: none; }
 @keyframes wspin { to { transform: rotate(360deg); } }
@@ -492,7 +501,8 @@ button.wstat.on { outline: 2px solid var(--focus); background: var(--panel); }
 .wcard.cloud.failed { outline: 1px solid var(--cloud-fail); }
 .wcard.cloud.finished, .wcard.cloud.stale { opacity: .72; }
 .wbadge.cloud { border-color: var(--badge-held-edge); color: var(--badge-held-fg); }
-.kanban-board { display: grid; grid-template-columns: repeat(6, minmax(180px, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 8px; align-items: stretch; }
+.kanban-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); grid-template-rows: minmax(0, 1fr); gap: 8px; align-items: stretch; }
+.kanban-col.flagged { border-color: var(--badge-held-edge); }
 #kanbanBoard.fold-body { height: 22rem; max-height: 22rem; overflow-x: auto; overflow-y: hidden; }
 .kanban-col { min-width: 180px; min-height: 0; max-height: 100%; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--stat-bg); padding: 6px; }
 .kanban-col h3 { flex: none; margin: 0 0 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--stat-bg); }
@@ -523,20 +533,20 @@ a.wgh:hover,
 #cardPop dl { margin: 8px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 8px; font-size: 12px; }
 #cardPop dt { color: var(--detail-label); } #cardPop dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 900px) {
-  .kanban-board { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .kanban-board { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); grid-auto-columns: minmax(0, 1fr); grid-template-rows: none; }
   #kanbanBoard.fold-body { height: auto; max-height: none; overflow: visible; }
   .kanban-col { min-width: 0; height: 16rem; max-height: 16rem; }
 }
 .wcard.glow { animation: wglow 2.6s ease-out; }
 @keyframes wglow { 0% { box-shadow: 0 0 0 2px var(--glow), 0 0 18px var(--glow); } 100% { box-shadow: none; } }
 @media (prefers-reduced-motion: reduce) { .wcard.glow { animation: none; outline: 2px solid var(--glow); } }
-@media (max-width: 900px) { .split { grid-template-columns: 1fr; } #waveToggle { display: inline-block; } .wave.collapsed .wave-body { display: none; } .wave { height: auto; max-height: none; } }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } #waveToggle { display: inline-block; } .wave.collapsed .wave-body { display: none; } .wave, #meshPanel { height: auto; max-height: none; } #meshPanel { overflow: visible; } }
 .fresh { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; font-weight: 600; }
 .fresh-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--fresh-idle); flex: none; }
 .fresh.green .fresh-dot { background: var(--fresh-green); }
 .fresh.amber .fresh-dot { background: var(--fresh-amber); }
 .fresh.red .fresh-dot { background: var(--fresh-red); }
-    #cardRecent, #queueBox, #cardHist, #trackBox, #statsFold, #cardsFold, #cloudFold { margin-top: 8px; }
+    #cardRecent, #queueBox, #cardHist, #trackBox, #cardsFold, #cloudFold { margin-top: 8px; }
     #wave > .fold { border: 1px solid var(--line); border-radius: 8px; background: transparent; padding: 0 8px; }
     #wave > .fold:not(.collapsed) { background: var(--stat-bg); }
     #wave > .fold:hover { background: var(--log-hover); }
@@ -573,7 +583,7 @@ button:hover { border-color: var(--control-hover); }
     .fold-sum { margin-left: auto; color: var(--dim); font-weight: 450; font-size: 12px; }
     .fold-body { max-height: var(--fold-cap, 16rem); overflow: auto; }
     .fold.collapsed .fold-body { display: none; }
-    #meshPanel > .fold-body { max-height: none; overflow: visible; }
+    #meshPanel > .fold-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
     #cardsFold:not(.collapsed) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     #waveBody { max-height: none; flex: 1 1 auto; min-height: 220px; overflow-y: auto; }
     #cardGroup { flex: none; width: auto; align-self: center; margin: 0; white-space: nowrap; font-size: 11px; font-weight: 650; line-height: 1.2; padding: 3px 8px; background: transparent; color: var(--text); border: 0; border-radius: 6px; }
@@ -610,6 +620,30 @@ footer a { color: var(--foot); }
     <p class="status" id="status">Loading…</p>
     <p class="fresh" id="fresh"><span class="fresh-dot"></span><span id="freshText">Loading…</span></p>
     <div hidden><canvas id="mark" width="112" height="44"></canvas><b id="fleet"></b><span id="blackout"></span></div>
+  </header>
+
+  <div class="fold" data-fold="stats" id="statsFold">
+    <button class="fold-head" type="button" aria-expanded="true"><span>Stats</span><span class="fold-sum" id="statsSum"></span></button>
+    <div class="fold-body"><div class="wave-stats" id="waveStats" aria-label="last 24 h and open now"></div></div>
+  </div>
+
+  <div class="split">
+  <section class="panel fold" id="meshPanel" data-fold="mesh">
+    <button class="fold-head" type="button" aria-expanded="true"><span>Mesh</span><span class="fold-sum" id="meshSum"></span></button>
+    <section class="seats fold" id="seats" data-fold="roster" aria-label="Seats">
+      <button class="fold-head" type="button" aria-expanded="true"><span>Roster</span><span class="fold-sum" id="rosterSum"></span></button>
+      <div class="fold-body" id="seatGrid"></div>
+    </section>
+    <div class="fold-body">
+    <div class="lens-head">
+      <span>THE LENS · PING-PONG VOLLEY</span>
+      <span class="legend">pings = handoffs + pushes · circles = seats · squares = rails</span>
+    </div>
+    <div id="head">&nbsp;</div>
+    <div id="headTime">&nbsp;</div>
+    <canvas id="mesh" width="920" height="400" aria-label="Mesh of seats and rails with handoff pings"></canvas>
+    <p class="mesh-legend" id="meshLegend"><span title="index.html drawNode. Hot seat from activeSeats over a handoff or push, or the rewind window. Three strokes. Live duration 2 times FLASH_MS, 5200ms. Letter seats.">Hot ring 5.2s</span><span title="index.html drawNode. A seen seat is live or active, and it is not working. One dim stroke. The name does not roll.">Seen ring</span><span title="index.html draw. A ping whose source is this node. One sine, PULSE_MS 900, across the flight. Flight is 2600ms, up to 7800ms.">Depart pulse</span><span title="index.html drawPing. from equals to. Radius 24 to 46 and alpha 1 to 0 across that same flight.">One-node ring</span></p>
+    </div>
     <div class="controls mesh-controls" aria-label="Timeline">
       <button id="play" type="button" title="Play / pause the replay (Live plays in real time; click the timeline to replay from there)">&#9654; Play</button>
       <select id="speed" aria-label="Replay speed">
@@ -619,44 +653,13 @@ footer a { color: var(--foot); }
         <option value="3600">1 h / s</option>
       </select>
       <button id="live" type="button" class="on">Live</button>
-      <label class="ambient-toggle" title="Replay loop: every 10 s, replay the last few minutes dimmed (visual only)"><input id="ambient" type="checkbox" checked> Replay loop</label>
+      <label class="ambient-toggle" title="Replay loop: every 10 s, replay the last hour dimmed (visual only)"><input id="ambient" type="checkbox" checked> Replay loop</label>
       <input id="slider" type="range" min="0" max="1" step="1000" value="1" aria-label="Timeline">
       <span id="tLabel"></span>
     </div>
-  </header>
-
-  <section class="panel seats fold" id="seats" data-fold="roster" aria-label="Seats">
-    <button class="fold-head" type="button" aria-expanded="true"><span>Roster</span><span class="fold-sum" id="rosterSum"></span></button>
-    <div class="fold-body" id="seatGrid"></div>
   </section>
-
-  <div class="split">
-  <div class="split-main">
-  <section class="panel fold" id="meshPanel" data-fold="mesh">
-    <button class="fold-head" type="button" aria-expanded="true"><span>Mesh</span><span class="fold-sum" id="meshSum"></span></button>
-    <div class="fold-body">
-    <div class="lens-head">
-      <span>THE LENS · PING-PONG VOLLEY</span>
-      <span class="legend">pings = handoffs + pushes · circles = seats · squares = rails</span>
-    </div>
-    <div id="head">&nbsp;</div>
-    <div id="headTime">&nbsp;</div>
-    <canvas id="mesh" width="920" height="400" aria-label="Mesh of seats and rails with handoff pings"></canvas>
-    <p class="mesh-legend" id="meshLegend"><span title="index.html drawNode. Hot seat from activeSeats over a handoff or push, or the rewind window. Three strokes. Live duration 2 times FLASH_MS, 5200ms. Letter seats.">Hot ring 5.2s</span><span title="index.html draw. A ping whose source is this node. One sine, PULSE_MS 900, across the flight. Flight is 2600ms, up to 7800ms.">Depart pulse</span><span title="index.html drawPing. from equals to. Radius 24 to 46 and alpha 1 to 0 across that same flight.">One-node ring</span></p>
-    </div>
-  </section>
-  <div id="agentPing" hidden></div>
-  <section class="panel kanban fold" id="kanban" data-fold="kanban" aria-label="Kanban">
-    <button class="fold-head" type="button" aria-expanded="true" aria-controls="kanbanBoard"><span>Kanban</span><span class="fold-sum" id="kanbanSum"></span></button>
-    <div class="fold-body kanban-board" id="kanbanBoard"></div>
-  </section>
-  </div>
   <aside class="panel wave" id="wave" aria-label="Board (read-only)">
     <div class="wave-head"><b>🌊 Board</b><span id="waveCount"></span><button id="waveToggle" type="button" aria-expanded="true" aria-controls="waveBody">Hide</button></div>
-    <div class="fold" data-fold="stats" id="statsFold">
-      <button class="fold-head" type="button" aria-expanded="true"><span>Stats</span><span class="fold-sum" id="statsSum"></span></button>
-      <div class="fold-body"><div class="wave-stats" id="waveStats" aria-label="last 24 h and open now"></div></div>
-    </div>
     <div class="fold" data-fold="cards" id="cardsFold">
       <div class="fold-bar">
         <button class="fold-head" type="button" aria-expanded="true"><span>Cards</span><span class="fold-sum" id="cardsSum"></span></button>
@@ -692,6 +695,11 @@ footer a { color: var(--foot); }
     </div>
   </aside>
   </div>
+  <div id="agentPing" hidden></div>
+  <section class="panel kanban fold" id="kanban" data-fold="kanban" aria-label="Kanban">
+    <button class="fold-head" type="button" aria-expanded="true" aria-controls="kanbanBoard"><span>Kanban</span><span class="fold-sum" id="kanbanSum"></span></button>
+    <div class="fold-body kanban-board" id="kanbanBoard"></div>
+  </section>
 
   <dialog id="cardPop" aria-labelledby="cardPopTitle">
     <div class="card-pop">
@@ -735,7 +743,7 @@ footer a { color: var(--foot); }
   var t0Page = performance.now();
   var pos = {};                // per-frame node positions (SATS + bob)
   // Replay: replay the recent past as a short live on load, then go live (reuses rewindTo/play/goLive)
-  var REPLAY_MS = 6500, REPLAY_WINDOW_MS = 5 * 60 * 1000, REPLAY_MIN_EVENTS = 20;
+  var REPLAY_MS = 6500, REPLAY_WINDOW_MS = 60 * 60 * 1000, REPLAY_MIN_EVENTS = 20;
   var replay = null;         // { speed: the user's speed, restored when the live ends }
   function endReplay() { if (!replay) return; speed = replay.speed; replay = null; lastText = 0; }
   function startReplay() {
@@ -796,9 +804,25 @@ footer a { color: var(--foot); }
     L.COLOR[name] = next;
     return next;
   }
-  function paintRoster(entries) {
-    if (!entries || !entries.length) return;
-    var sig = entries.map(function (a) { return a[0] + '\n' + (a[1] || ''); }).join('\n');
+  function rosterSeatRow(feed, name) {
+    var seats = feed && feed.fleet && feed.fleet.seats;
+    if (!seats || !name) return null;
+    if (seats[name]) return seats[name];
+    var low = String(name).toLowerCase();
+    if (seats[low]) return seats[low];
+    var keys = Object.keys(seats);
+    for (var i = 0; i < keys.length; i++) if (String(keys[i]).toLowerCase() === low) return seats[keys[i]];
+    return null;
+  }
+  function paintRoster(entries, feed) {
+    if (!entries) return;
+    if (!entries.length && !feed) return;
+    var sig = entries.map(function (a) {
+      var row = rosterSeatRow(feed, a[0]);
+      var last = row && row.last_ct ? String(row.last_ct) : '';
+      var dormant = row && L.seatDormant && L.seatDormant(row.last_ct, Date.now()) ? '1' : '0';
+      return a[0] + '\n' + (a[1] || '') + '\n' + last + '\n' + dormant;
+    }).join('\n');
     if (sig === paintRoster.sig) return;
     paintRoster.sig = sig;
     L.AGENTS.splice(0, L.AGENTS.length);
@@ -810,16 +834,18 @@ footer a { color: var(--foot); }
       L.AGENTS.push(a);
       L.SEAT_NAMES.push(a[0]);
       if (!L.LABEL[a[0]]) L.LABEL[a[0]] = a[0];
+      var row = rosterSeatRow(feed, a[0]);
+      var dormant = !!(row && L.seatDormant && L.seatDormant(row.last_ct, Date.now()));
       var el = document.createElement('button');
       el.type = 'button';
-      el.className = 'seat';
+      el.className = 'seat' + (dormant ? ' dormant' : '');
       el.setAttribute('aria-expanded', 'false');
       var label = String(L.LABEL[a[0]] || a[0]);
       var roleText = String(a[1] || '');
       el.innerHTML = '<span class="dot"></span><span class="nm"></span>';
       var nm = el.querySelector('.nm');
       nm.textContent = label.toUpperCase();
-      nm.title = label;
+      nm.title = dormant ? label + ' · dormant' : label;
       var ink = seatColor(a[0]);
       nm.style.setProperty('--nm', ink[0] + ', ' + ink[1] + ', ' + ink[2]);
       el.addEventListener('click', function () {
@@ -894,13 +920,23 @@ footer a { color: var(--foot); }
     var s = f && f.seats && (f.seats[name] || f.seats[String(name).toLowerCase()]);
     return !!(s && s.active);
   }
+  function fleetNames(k) {   // mesh keys are title case; activity stores the seat id in lower case
+    return k === 'blinky' ? ['Coord', 'coord', 'blinky'] : [k, String(k).toLowerCase()];
+  }
   // the one seat state for chip + node; views recorded for tests/debug (window.LIVE_SEAT_VIEWS)
   var chipView = {}, nodeView = {}; window.LIVE_SEAT_VIEWS = { chip: chipView, node: nodeView };
   function seatState(k, hot) { return L.seatState(fleetWorking(k), !!(hot && hot[k]), fleetActive(k)); }
   function fleetWorking(k) {   // in-flight spinner; not counted in N of M
-    var f = window.LIVE_FLEET, name = k === 'blinky' ? 'Coord' : k;
+    var f = window.LIVE_FLEET;
     if (k === 'CloudAgents') return !!(f && f.cloud && f.cloud.working);
-    return !!(f && ((f.working && f.working[name]) || (f.seats && f.seats[name] && f.seats[name].working)));
+    if (!f) return false;
+    var names = fleetNames(k);
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      if (f.working && f.working[name]) return true;
+      if (f.seats && f.seats[name] && f.seats[name].working) return true;
+    }
+    return false;
   }
   // Live queue: new ids wait here until the view is live, then flash in time order (late ones tagged)
   var LATE_MS = 2 * 60 * 1000, CATCHUP_MS = 30 * 60 * 1000, BATCH_MS = 9000;
@@ -924,8 +960,14 @@ footer a { color: var(--foot); }
     });
   }
   function fleetSilent(k) {
-    var f = window.LIVE_FLEET, name = k === 'blinky' ? 'Coord' : k;
-    return !!(f && f.seats && f.seats[name] && f.seats[name].silent);
+    var f = window.LIVE_FLEET;
+    if (!f || !f.seats) return false;
+    var names = fleetNames(k);
+    for (var i = 0; i < names.length; i++) {
+      var row = f.seats[names[i]];
+      if (row && row.silent) return true;
+    }
+    return false;
   }
   function currentPings(nowWall) {
     if (state.live) {
@@ -939,7 +981,7 @@ footer a { color: var(--foot); }
   }
 
   // Ambient Replay loop: dimmed overlay replay on its own clock; never changes live state, pill, counts or seats
-  var AMBIENT_EVERY_MS = 10000, AMBIENT_MS = 5000, AMBIENT_WINDOW_MS = 5 * 60 * 1000, AMBIENT_ALPHA = 0.4;
+  var AMBIENT_EVERY_MS = 10000, AMBIENT_MS = 5000, AMBIENT_WINDOW_MS = 60 * 60 * 1000, AMBIENT_ALPHA = 0.4;
   var ambientOn = !reduced && !/[?&]replay=0(&|$)/.test(location.search);
   var spectrumOn = false;
   function readSpectrum() { spectrumOn = L.spectrumEnabled(L.SPECTRUM, location.search, reduced); }
@@ -1003,7 +1045,7 @@ footer a { color: var(--foot); }
   // same events; read-only). Grouped by status unless the Cards toggle is by agent. Click a card for its packet and last 5 beats; a related live beat glows it.
   var wb = { cards: [], cloudAgents: [], stamp: '', key: '', open: {}, byKey: {}, glows: 0, kidsOpen: {}, pinsOpen: false, issuesOpen: {}, doneOpen: {}, statFilter: '', cloudDoneOpen: false, group: 'status' };
   window.LIVE_WAVE = wb;
-  var WB_PACKET = ['goal', 'constraints', 'path', 'acceptance', 'evidence', 'next owner', 'escalate'];
+  var WB_PACKET = ['goal', 'constraints', 'path', 'acceptance', 'evidence', 'next owner', 'escalate', 'raci'];
   var WB_BEAT_KINDS = /^(pr_open|issue_open|pr_commit|pr_force_push|pr_update|critic_|merged|lab_retest_|check_run|workflow_run|ci_)/;
   function wbCt(t) {
     try { var o = { timeZone: 'America/Chicago' }, d = new Date(t).toLocaleDateString('en-US', o) !== new Date().toLocaleDateString('en-US', o);
@@ -1033,6 +1075,11 @@ footer a { color: var(--foot); }
     var col = seatInk(name);
     if (col) el.style.borderLeftColor = rgb(col);
   }
+  function statusId(raw) { return L.statusId ? L.statusId(raw) : String(raw == null ? '' : raw).trim().toLowerCase(); }
+  function statusLabel(raw, fallback) {
+    var name = L.statusName ? L.statusName(raw) : '';
+    return name || fallback;
+  }
   function laneBucket(c) {
     var cloud = null;
     (wb.cloudAgents || []).forEach(function (a) {
@@ -1040,7 +1087,7 @@ footer a { color: var(--foot); }
       if (!cloud || a.state === 'running') cloud = a;
     });
     c._agentDone = !!(cloud && (cloud.state === 'finished' || cloud.state === 'failed' || cloud.state === 'stale'));
-    var closed = c.state === 'closed' || c.stage === 'done';
+    var closed = statusId(c.state) === 'closed' || statusId(c.stage) === 'done';
     var merged = !!(c.merged_by) || closed || (c.beats || []).some(function (b) { return /merge/i.test(String(b && b.what || '')); });
     if (closed || (c._agentDone && merged)) return 'done';
     if (c._agentDone) return 'review';
@@ -1060,7 +1107,7 @@ footer a { color: var(--foot); }
       var m, re = /#(\d+)/g, t = cleanTitle(c);
       while ((m = re.exec(t))) {
         var pk = String(c.repo).toLowerCase() + '#' + Number(m[1]), p = byKey[pk];
-        if (p && p !== c && p.kind === 'pr' && p.state !== 'closed') { (kids[pk] = kids[pk] || []).push(c); child[c.key] = pk; return; }
+        if (p && p !== c && p.kind === 'pr' && statusId(p.state) !== 'closed') { (kids[pk] = kids[pk] || []).push(c); child[c.key] = pk; return; }
       }
     });
     return { kids: kids, child: child };
@@ -1104,17 +1151,23 @@ footer a { color: var(--foot); }
       dl.appendChild(wbEl('dd', '', value));
     }
     row('owner', c.owner || '—');
-    row('status', c.state || 'live');
+    row('status', statusLabel(c.state, 'Live'));
     if (!c.pinned) {
       WB_PACKET.forEach(function (f) {
         var v = (c.packet || {})[f];
+        if (f === 'raci') {
+          var gaps = c.raci_missing || [];
+          if (!v && !gaps.length) return;
+          row(f, v || '— missing —');
+          return;
+        }
         if (!v && !(f === 'acceptance' || f === 'next owner')) return;
         row(f, v || '— missing —');
       });
       if (c.start_after) row('start after', c.start_after);
       if (c.hold && (c.hold.by || c.hold.reason || c.hold.until)) {
-        row('held by', c.hold.by || '—');
-        row('reason', c.hold.reason || '—');
+        row('parked by', c.hold.by || '—');
+        row('waits on', c.hold.reason || '—');
         if (c.hold.until) row('until', c.hold.until);
       }
     }
@@ -1350,7 +1403,7 @@ footer a { color: var(--foot); }
       pings.forEach(function (pk) { if (pk.src === key) pul = Math.max(pul, L.pulse(pk.p * L.PULSE_MS, reduced)); });
       ctx.globalAlpha = L.entry(since, i, reduced);
       var nv = L.seatView(seatState(key, hot)); nodeView[key] = nv;   // same state as the header chip
-      drawNode(key, nv.lit, fs, pul, nv.nodeWorking, nowWall);
+      drawNode(key, nv.lit, fs, pul, nv.nodeWorking, nowWall, !!nv.seen);
 
       ctx.globalAlpha = 1;
     });
@@ -1362,21 +1415,33 @@ footer a { color: var(--foot); }
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
-  function drawNode(key, isHot, fs, pul, spinning, nowWall) {
+  function drawNode(key, isHot, fs, pul, spinning, nowWall, seen) {
     var xy = pos[key], x = xy[0], y = xy[1], c = L.COLOR[key], sq = !!L.SQUARE[key], r = sq ? 15 : 18 + 3 * pul;
     var img = imgs[key], glyph = L.GLYPH[key], mark = L.MARK_PATH[key];
     var hasImg = !!(img && img.complete && img.naturalWidth);
-    var bare = hasImg || (!sq && !!glyph);   // image / glyph nodes: no ring
+    var bare = hasImg || (!sq && !!glyph);   // glyph skips the letter ring. an avatar paints its ring after the image
+    var seenNow = !!seen && !isHot;   // one dim stroke. active or live, not the working sheen
     if (isHot && !bare) {
       for (var k = 3; k >= 1; k--) {
         var rr = r + k * 5; ctx.strokeStyle = rgb(c, 1 / (k + 1)); ctx.lineWidth = 2;
         if (sq) { roundRect(x - rr, y - rr, rr * 2, rr * 2, 6); } else { ctx.beginPath(); ctx.arc(x, y, rr, 0, 7); }
         ctx.stroke();
       }
+    } else if (seenNow && !hasImg) {
+      var sr = r + 4; ctx.strokeStyle = rgb(c, 0.35); ctx.lineWidth = 1.5;
+      if (sq) { roundRect(x - sr, y - sr, sr * 2, sr * 2, 6); } else { ctx.beginPath(); ctx.arc(x, y, sr, 0, 7); }
+      ctx.stroke();
     }
-    ctx.fillStyle = cssVar('--node-fill'); ctx.strokeStyle = rgb(c); ctx.lineWidth = isHot ? 3 : 2;
-    if (hasImg) {   // avatar: the image as-is, no circle / ring / border / clip
+    ctx.fillStyle = cssVar('--node-fill'); ctx.strokeStyle = rgb(c); ctx.lineWidth = isHot ? 3 : seenNow ? 2.5 : 2;
+    if (hasImg) {   // avatar image. the seen ring and the working ring sit outside it
       var as = 46 + 4 * pul; ctx.drawImage(img, x - as / 2, y - as / 2, as, as);
+      var ar = as / 2;
+      if (isHot) {
+        for (var hk = 3; hk >= 1; hk--) {
+          var hr = ar + hk * 5; ctx.strokeStyle = rgb(c, 1 / (hk + 1)); ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(x, y, hr, 0, 7); ctx.stroke();
+        }
+      } else if (seenNow) { ctx.strokeStyle = rgb(c, 0.35); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, ar + 4, 0, 7); ctx.stroke(); }
     }
     else if (mark && typeof Path2D !== 'undefined') {   // vector mark, light fill (no font, no fetch)
       ctx.save(); ctx.translate(x - 15, y - 15); ctx.scale(30 / 16, 30 / 16);
@@ -1384,6 +1449,7 @@ footer a { color: var(--foot); }
     }
     else if (glyph) {
       if (!sq && isHot) { ctx.fillStyle = rgb(c, 0.22); ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 7); ctx.fill(); }   // seat glow, no circle
+      else if (!sq && seenNow) { ctx.fillStyle = rgb(c, 0.1); ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 7); ctx.fill(); }
       ctx.fillStyle = cssVar('--glyph'); ctx.font = 'bold 30px "Inter", system-ui, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol", "Noto Sans Math", sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(glyph, x, y + 1);
     }
@@ -1459,8 +1525,9 @@ footer a { color: var(--foot); }
     };
   }
   function cardWorking(c) {
-    if (!c || c.pinned || c._bucket === 'done' || c._agentDone || c.state === 'closed' || c.state === 'parked' || c.state === 'held' || c.stage === 'done') return false;
-    return fleetWorking(cardSeat(c));
+    if (!c || c.pinned || c._bucket === 'done' || c._agentDone || statusId(c.state) === 'closed' || statusId(c.state) === 'parked' || statusId(c.state) === 'held' || statusId(c.stage) === 'done') return false;
+    if (!L.cardInWork) return false;
+    return !!L.cardInWork(Object.assign({}, c, { _seat: cardSeat(c) }), window.LIVE_FLEET);
   }
 
   function readCardGroup() {
@@ -1507,7 +1574,7 @@ footer a { color: var(--foot); }
     var countedView = Array.isArray(countedIds);
     if (wb.statFilter && S) {
       if (countedView) cards = countedIds.map(function (id) { return cardForCountedId(id, cards); });
-      else if (wb.statFilter === 'open_total') cards = cards.filter(function (c) { return c.state !== 'closed' && c.stage !== 'done'; });
+      else if (wb.statFilter === 'open_total') cards = cards.filter(function (c) { return statusId(c.state) !== 'closed' && statusId(c.stage) !== 'done'; });
       else if (wb.statFilter === 'arch1_backlog') cards = [];
     }
     cards.forEach(function (c) { c._bucket = laneBucket(c); });
@@ -1516,8 +1583,8 @@ footer a { color: var(--foot); }
     var live = 0, stalls = 0, held = 0;
     wb.cards.forEach(function (c) {
       if (c.pinned) return;
-      if (c.state === 'live') live++;
-      if (c.state === 'held') held++;
+      if (statusId(c.state) === 'live') live++;
+      if (statusId(c.state) === 'held') held++;
       if (c.stall) stalls++;
     });
     var LK = linkKids(wb.cards);
@@ -1533,14 +1600,17 @@ footer a { color: var(--foot); }
       meta.appendChild(a);
     }
     function kanbanCard(c) {
-      var li = wbEl('li', 'wcard ' + (c.state || 'live'));
+      var stateId = statusId(c.state) || 'live';
+      var unknown = L.statusFlagged && L.statusFlagged(c.stage);
+      var li = wbEl('li', 'wcard ' + stateId + (unknown ? ' unknown' : ''));
       li.dataset.key = c.key; paintEdge(li, cardSeat(c));
       var top = wbEl('div', 'wtop');
       top.appendChild(wbEl('span', 'witem', (c.number ? '#' + c.number + ' ' : '') + cleanTitle(c)));
       li.appendChild(top);
       var meta = wbEl('div', 'wmeta');
-      meta.appendChild(wbEl('span', '', (c.owner || '—') + ' · ' + (c.stage || 'open')));
-      meta.appendChild(wbEl('span', 'wbadge state', c.state || 'live'));
+      meta.appendChild(wbEl('span', '', (c.owner || '—') + ' · ' + statusLabel(c.stage, 'Open')));
+      meta.appendChild(wbEl('span', 'wbadge state', statusLabel(c.state, 'Live')));
+      if (unknown) meta.appendChild(wbEl('span', 'wbadge held', 'unknown'));
       var acc = c.packet && c.packet.acceptance;
       if (acc) meta.appendChild(wbEl('span', '', acc));
       addGithubFace(meta, c);
@@ -1550,19 +1620,23 @@ footer a { color: var(--foot); }
     function renderKanban() {
       var board = $('kanbanBoard'); if (!board) return;
       board.textContent = '';
-      var stages = L.KANBAN_STAGES || ['open', 'review', 'fix', 'merge', 'retest', 'done'];
+      var stages = (L.KANBAN_STAGES || ['open', 'review', 'fix', 'merge', 'retest', 'done']).slice();
       var cols = {};
       stages.forEach(function (s) { cols[s] = []; });
+      var extra = [];
       (wb.cards || []).forEach(function (c) {
         if (!c) return;
         var col = L.kanbanColumn ? L.kanbanColumn(c) : 'open';
-        if (!cols[col]) col = 'open';
+        if (!cols[col]) { cols[col] = []; extra.push(col); }
         cols[col].push(c);
       });
-      stages.forEach(function (s) {
-        var sec = wbEl('section', 'kanban-col');
+      stages.concat(extra).forEach(function (s) {
+        var flagged = L.statusFlagged ? L.statusFlagged(s) : false;
+        var sec = wbEl('section', 'kanban-col' + (flagged ? ' flagged' : ''));
         sec.dataset.stage = s;
-        sec.appendChild(wbEl('h3', '', s + ' (' + cols[s].length + ')'));
+        if (flagged) sec.dataset.flagged = 'unknown';
+        sec.appendChild(wbEl('h3', '', statusLabel(s, s) + ' (' + cols[s].length + ')'));
+        if (flagged) sec.appendChild(wbEl('span', 'wbadge held', 'unknown'));
         var ul = wbEl('ul', 'wcards');
         cols[s].sort(byBeat).forEach(function (c) { ul.appendChild(kanbanCard(c)); });
         sec.appendChild(ul);
@@ -1573,18 +1647,23 @@ footer a { color: var(--foot); }
       if (want && $('cardPop') && !$('cardPop').open) openCardPop(want);
     }
     function card(c) {
-      var li = wbEl('li', 'wcard ' + (c.state || 'live') + (c.packet_ok === false && !c.pinned ? ' nopacket' : '') + (c.stall ? ' stall' : '') + (wb.open[c.key] ? ' open' : ''));
+      var raciMiss = c.raci_missing && c.raci_missing.length;
+      var stateId = statusId(c.state) || 'live';
+      var unknown = !c.pinned && L.statusFlagged && L.statusFlagged(c.stage);
+      var li = wbEl('li', 'wcard ' + stateId + (c.packet_ok === false && !c.pinned ? ' nopacket' : '') + (raciMiss ? ' noraci' : '') + (unknown ? ' unknown' : '') + (c.stall ? ' stall' : '') + (wb.open[c.key] ? ' open' : ''));
       li.dataset.key = c.key; wb.byKey[c.key] = li; paintEdge(li, cardSeat(c));
       var top = wbEl('div', 'wtop');
       var it = wbEl('span', 'witem', (c.number ? '#' + c.number + ' ' : '') + cleanTitle(c)); it.title = (c.repo ? c.repo + ' #' + c.number + ' ' : '') + (c.title || '');
       if (cardWorking(c)) { var spin = wbEl('span', 'wspin'); spin.setAttribute('aria-label', 'in work'); top.appendChild(spin); }
       top.appendChild(it); top.appendChild(wbEl('span', 'wage', c.pinned ? '' : wbAge(c.last_beat_t))); li.appendChild(top);
       var meta = wbEl('div', 'wmeta');
-      meta.appendChild(wbEl('span', '', (c.owner || '—') + ' · ' + (c.pinned ? (c.section || 'pinned') : (c.stage || 'open'))));
-      meta.appendChild(wbEl('span', 'wbadge state', c.state || 'live'));
+      meta.appendChild(wbEl('span', '', (c.owner || '—') + ' · ' + (c.pinned ? (c.section || 'pinned') : statusLabel(c.stage, 'Open'))));
+      meta.appendChild(wbEl('span', 'wbadge state', statusLabel(c.state, 'Live')));
+      if (unknown) meta.appendChild(wbEl('span', 'wbadge held', 'unknown'));
       if (c.pinned) meta.appendChild(wbEl('span', 'wbadge pin', 'pinned'));
       else if (c.packet_ok === false) meta.appendChild(wbEl('span', 'wbadge', 'needs a brief'));
-      if (c.state === 'held') meta.appendChild(wbEl('span', 'wbadge held', 'On hold'));
+      if (c.raci_missing && c.raci_missing.length) meta.appendChild(wbEl('span', 'wbadge raci', 'needs ' + c.raci_missing.join(' ')));
+      if (statusId(c.state) === 'held') meta.appendChild(wbEl('span', 'wbadge held', L.parkedLabel(c)));
       if (c.start_after) meta.appendChild(wbEl('span', 'wbadge', 'start after ' + c.start_after));
       if (c.stall) meta.appendChild(wbEl('span', 'wbadge stall', 'quiet 60 min+'));
       addGithubFace(meta, c);
@@ -1684,8 +1763,8 @@ footer a { color: var(--foot); }
       pins.forEach(function (c) { pu.appendChild(card(c)); }); body.appendChild(pu);
     }
     var rest = wb.cards.filter(function (c) { return !(c.pinned || cardWorking(c) || LK.child[c.key]); });
-    var bucketName = { waiting: 'waiting on this seat', review: 'in review', held: 'on hold', parked: 'parked' };
-    var statusName = { waiting: 'waiting', review: 'in review', held: 'on hold', parked: 'parked' };
+    var bucketName = { waiting: 'waiting on this seat', review: 'in review', held: 'parked behind a blocker', parked: 'parked' };
+    var statusName = { waiting: 'waiting', review: 'in review', held: 'parked behind a blocker', parked: 'parked' };
     function paintOpen(cs, ik, sub) {
       if (!cs.length) return;
       if (sub) body.appendChild(wbEl('div', 'wsub', sub));
@@ -1740,7 +1819,7 @@ footer a { color: var(--foot); }
     if (!wb.stamp) waveHead.textContent = 'building';
     else if (!wb.cards.length && !cloudN) waveHead.textContent = 'empty';
     else if (!wb.cards.length) waveHead.textContent = cloudN + ' cloud';
-    else waveHead.textContent = live + ' live' + (held ? ' · ' + held + ' held' : '') + (stalls ? ' · ' + stalls + ' stalled' : '') + cloudBit;
+    else waveHead.textContent = live + ' live' + (held ? ' · ' + held + ' parked' : '') + (stalls ? ' · ' + stalls + ' stalled' : '') + cloudBit;
     var cardsSum = $('cardsSum'); if (cardsSum) cardsSum.textContent = waveHead.textContent;
     var statsSum = $('statsSum'); if (statsSum) statsSum.textContent = S && S.open_total != null ? String(S.open_total) + ' open' : '';
     var cloudSum = $('cloudSum'); if (cloudSum) cloudSum.textContent = String((wb.cloudAgents || []).length);
@@ -1797,8 +1876,9 @@ footer a { color: var(--foot); }
       var s = seatEls[a[0]], c = L.COLOR[a[0]], v = L.seatView(seatState(a[0], hot)), on = v.lit;
       chipView[a[0]] = v;
       s.el.classList.toggle('live', on);
-      s.el.classList.toggle('idle', !on);
-      s.dot.style.background = on ? rgb(c) : cssVar('--dot-off');
+      s.el.classList.toggle('seen', !!v.seen);
+      s.el.classList.toggle('idle', !on && !v.seen);
+      s.dot.style.background = on ? rgb(c) : v.seen ? rgb(c, 0.55) : cssVar('--dot-off');
       s.dot.style.boxShadow = on ? '0 0 0 2px ' + cssVar('--ring-gap') + ', 0 0 0 4px ' + rgb(c) : 'none';
       var sil = !v.blink && fleetSilent(a[0]);
       s.el.classList.toggle('silent', sil); if (sil) s.dot.style.background = cssVar('--silent-ink');
@@ -1834,10 +1914,12 @@ footer a { color: var(--foot); }
     $('play').innerHTML = L.isPlaying(state.live, playing) ? '&#10074;&#10074; Pause' : '&#9654; Play';
     var seatNames = L.SEAT_NAMES;   // the strip's seats: header count and chips read the same seatState
     var bots = seatNames.filter(function (k) { return seatState(k, hot) !== 'idle'; }).length;
+    var workingN = seatNames.filter(function (k) { return fleetWorking(k); }).length;
     window.LIVE_HEADER_ACTIVE = [bots, seatNames.length];
+    window.LIVE_HEADER_WORKING = [workingN, seatNames.length];
     var total = window.LIVE_FEED_TOTAL != null ? window.LIVE_FEED_TOTAL : state.events.length;
     var st = state.generatedAt ? 'Refreshed <b title="' + L.fmtCt(state.generatedAt) + '">' + L.ago(now - state.generatedAt) + '</b>' : 'Waiting for feed';
-    st += ' · ' + Number(total).toLocaleString('en-US') + ' events · ' + bots + ' of ' + seatNames.length + ' seats active';
+    st += ' · ' + Number(total).toLocaleString('en-US') + ' events · ' + bots + ' of ' + seatNames.length + ' seats active · ' + workingN + ' working';
     paintFresh(now);
     if (fetchError) st += ' · <span class="err">' + fetchError + '</span>';
     $('status').innerHTML = st;
@@ -1948,6 +2030,12 @@ footer a { color: var(--foot); }
   });
 
   function frame(nowWall) {
+    // A hidden tab keeps the painted card ages. The show path repaints them.
+    if (document.hidden) {
+      lastFrame = nowWall;
+      requestAnimationFrame(frame);
+      return;
+    }
     var dt = Math.min(250, nowWall - lastFrame); lastFrame = nowWall;
     if (playing && (replay || !state.live)) {
       if (replay) state.live = false;
@@ -1988,7 +2076,9 @@ footer a { color: var(--foot); }
     if (tone) box.classList.add(tone);
     text.textContent = line;
   }
+  var lastQueue = null;
   function renderQueue(lines) {
+    lastQueue = lines;
     var ul = $('queueList'), lab = $('queueLabel');
     if (!ul) return;
     ul.textContent = '';
@@ -2007,11 +2097,11 @@ footer a { color: var(--foot); }
   }
   var cardHistRows = [], cardHistOn = false;
   function recentState(s) {
-    if (s === 'review') return 'in review';
-    if (s === 'held') return 'on hold';
-    if (s === 'parked') return 'parked';
-    if (s === 'closed') return 'closed';
-    return s || '';
+    var id = statusId(s);
+    if (id === 'review') return 'in review';
+    if (id === 'held' || id === 'parked') return 'parked';
+    if (id === 'closed') return 'closed';
+    return statusLabel(s, '');
   }
   function changeVerb(c) {
     if (!c) return '';
@@ -2019,7 +2109,7 @@ footer a { color: var(--foot); }
     var id = String(c.id || c.key || '').toLowerCase();
     var live = (wb.allCards || wb.cards || []).filter(function (x) { return String(x.key || '').toLowerCase() === id; })[0];
     if (live && (live.merged_by || (live.beats || []).some(function (b) { return /merge/i.test(String(b.what || '')); }))) return 'merged';
-    if (c.state === 'closed' || c.verb === 'closed') return 'closed';
+    if (statusId(c.state) === 'closed' || c.verb === 'closed') return 'closed';
     return c.verb || recentState(c.state);
   }
   function historyCard(c) {
@@ -2039,7 +2129,11 @@ footer a { color: var(--foot); }
   function renderCardRecent() {
     var ul = $('cardRecentList'); if (!ul) return;
     ul.textContent = '';
-    var rows = cardHistRows.filter(function (c) { return c && c.state && c.state !== 'live' && c.state !== 'open'; }).slice(0, 5);
+    var rows = cardHistRows.filter(function (c) {
+      if (!c || !c.state) return false;
+      var id = statusId(c.state);
+      return id !== 'live' && id !== 'open';
+    }).slice(0, 5);
     if (!rows.length) { ul.appendChild(wbEl('li', '', 'No recent changes')); foldSum('recentSum', '0'); return; }
     rows.forEach(function (c) { ul.appendChild(historyCard(c)); });
     foldSum('recentSum', String(rows.length));
@@ -2051,16 +2145,34 @@ footer a { color: var(--foot); }
     cardHistRows.forEach(function (c) { ul.appendChild(historyCard(c)); });
     foldSum('historySum', String(cardHistRows.length));
   }
-  function loadCardHist() {
-    fetch('/history/cards', { headers: { Accept: 'application/json' } }).then(function (r) {
-      if (!r.ok) return null;
-      return r.json();
-    }).then(function (b) {
-      if (!b || !Array.isArray(b.cards)) return;
-      cardHistRows = b.cards;
+  function loadCardHist(attempt) {
+    var n = attempt || 0;
+    var rows = [];
+    var seen = {};
+    function take(cursor) {
+      if (cursor && seen[cursor]) return Promise.resolve(null);
+      if (cursor) seen[cursor] = true;
+      var url = '/history/cards?limit=1000';
+      if (cursor) url += '&cursor=' + encodeURIComponent(cursor);
+      return fetch(url, { headers: { Accept: 'application/json' } }).then(function (r) {
+        if (!r.ok) throw new Error('history');
+        return r.json();
+      }).then(function (b) {
+        if (!b || !Array.isArray(b.cards)) return null;
+        rows = rows.concat(b.cards);
+        if (b.next && rows.length < 20000) return take(b.next);
+        return b;
+      });
+    }
+    take('').then(function (b) {
+      if (!b) return;
+      cardHistRows = rows;
       renderCardRecent();
       renderCardHist();
-    }).catch(function () {});
+      if (b.ready === false && n < 600) setTimeout(function () { loadCardHist(n + 1); }, 3000);
+    }).catch(function () {
+      if (n < 600) setTimeout(function () { loadCardHist(n + 1); }, 3000);
+    });
   }
   function showCardHist(on) {
     cardHistOn = !!on;
@@ -2221,15 +2333,49 @@ footer a { color: var(--foot); }
   loadHistoryDays();
   loadCardHist();
   var first = true;
+  // A hidden tab skips polls. Coming back clears etag/cursor once so the next poll is not a silent 304,
+  // and drops the stamp/key gates so ages and the health strip redraw even when the body is unchanged.
+  function armShow() {
+    mem.showEtag = mem.etag || '';
+    mem.etag = null;
+    mem.force = 1;
+    mem.showCursor = mem.cursor || '';
+    mem.cursor = null;
+    mem.forceShow = 1;
+  }
+  function finishShow() {
+    if (!wb.stamp && mem.showStamp) wb.stamp = mem.showStamp;
+    if (!mem.cursor && mem.showCursor) mem.cursor = mem.showCursor;
+    if (!mem.etag && mem.showEtag) mem.etag = mem.showEtag;
+    mem.showStamp = '';
+    mem.showCursor = '';
+    mem.showEtag = '';
+    mem.forceShow = 0;
+    wb.key = '';
+    trackState.stamp = '';
+    lastText = 0;
+    renderWave(true);
+    renderTrack();
+    if (lastQueue) renderQueue(lastQueue);
+    paintFresh(Date.now());
+  }
   function poll() {
     if (document.hidden && !first) return;
+    var show = mem.forceShow;
+    if (show) mem.forceShow = 0;
     L.fetchFeed(window.fetch.bind(window), Date.now(), mem).then(function (r) {
       source = r.source; fetchError = '';
-      if (!r.feed) return;
+      if (show) {
+        mem.showStamp = wb.stamp || '';
+        wb.stamp = '';
+        wb.key = '';
+      }
+      if (!r.feed) { if (show) finishShow(); return; }
       feedLoaded = true;
       if (L.rosterEntries) {
         var rosterRows = L.rosterEntries(r.feed);
-        if (rosterRows) paintRoster(rosterRows);
+        if (rosterRows && L.rosterKept) rosterRows = L.rosterKept(rosterRows, r.feed);
+        if (rosterRows) paintRoster(rosterRows, r.feed);
       }
       if (r.feed.freshness) {
         light.dataAt = Date.parse(r.feed.freshness.github_latest_ct || '') || 0;
@@ -2256,9 +2402,25 @@ footer a { color: var(--foot); }
       queueFresh(fresh);
       if (state.live) playFresh();
       first = false; lastText = 0; lastLogKey = '';
-    }).catch(function (err) { fetchError = 'feed fetch failed, retrying'; lastText = 0; console.warn(err); });
+      if (show) finishShow();
+    }).catch(function (err) {
+      fetchError = 'feed fetch failed, retrying'; lastText = 0; console.warn(err);
+      if (show) finishShow();
+    });
   }
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
+  var seenPage = false;
+  function onShown() {
+    if (document.hidden) return;
+    armShow();
+    poll();
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) onShown(); });
+  window.addEventListener('pageshow', function (ev) {
+    var firstShow = !seenPage;
+    seenPage = true;
+    if (firstShow && !ev.persisted) return;
+    onShown();
+  });
   poll();
   setInterval(poll, L.POLL_MS);
   requestAnimationFrame(frame);

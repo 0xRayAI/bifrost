@@ -140,6 +140,24 @@ function kindKey(repo, number, kind) {
 export function readArchiveIndex(dataDir) {
   const index = { eventIds: new Set(), eventKinds: new Set(), cardIds: new Set(), cardsByKey: new Map() };
   const root = path.join(dataDir || '', 'archive');
+  const rememberCard = (row) => {
+    if (!row || !row.key) return;
+    if (row.id) index.cardIds.add(String(row.id));
+    const key = String(row.key).toLowerCase();
+    const arr = index.cardsByKey.get(key) || [];
+    arr.push(row);
+    index.cardsByKey.set(key, arr);
+  };
+  try {
+    const book = path.join(root, 'cards.jsonl');
+    const bookStat = fs.statSync(book);
+    if (bookStat.size > 0 && bookStat.size <= 8 * 1024 * 1024) {
+      for (const line of fs.readFileSync(book, 'utf8').split('\n')) {
+        if (!line) continue;
+        try { rememberCard(JSON.parse(line)); } catch { /* truncated line */ }
+      }
+    }
+  } catch { /* no card book yet */ }
   let days = [];
   try { days = fs.readdirSync(root); } catch { return index; }
   for (const day of days) {
@@ -157,12 +175,7 @@ export function readArchiveIndex(dataDir) {
           if (row.repo && row.number != null && row.kind) index.eventKinds.add(kindKey(row.repo, row.number, row.kind));
           continue;
         }
-        if (!row.key) continue;
-        if (row.id) index.cardIds.add(String(row.id));
-        const key = String(row.key).toLowerCase();
-        const arr = index.cardsByKey.get(key) || [];
-        arr.push(row);
-        index.cardsByKey.set(key, arr);
+        rememberCard(row);
       }
     }
   }
