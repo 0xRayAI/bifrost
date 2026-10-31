@@ -22,6 +22,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine } from './wake-gate.mjs';
+import { queueView } from './inbox-queue.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions } from './archive.mjs';
 import { pinnedOrigin } from './origin.mjs';
@@ -772,6 +773,14 @@ function itemClosed(repo, number) {
 function lineCard(l) {
   return bfCards.find(x => x.repo && String(x.repo).toLowerCase() === String(l.repo || '').toLowerCase() && Number(x.number) === Number(l.number));
 }
+function queueOpts() {
+  return { titleOf: (line) => { const card = lineCard(line); return card && card.title ? String(card.title) : ''; } };
+}
+function arch1InboxDepth() {
+  const rows = Array.isArray(seatInbox.arch1) ? seatOpenRows('arch1', false) : [];
+  const head = queueView(rows, queueOpts());
+  return { open: rows.length, head: head.length, backlog: Math.max(0, rows.length - head.length) };
+}
 function lineDone(seat, l) {
   if (itemClosed(l.repo, l.number)) return false;
   const c = lineCard(l);
@@ -1357,6 +1366,7 @@ function evalNudges(now = Date.now()) {
     if (l1 && !l1.closed_at && now - l1.t >= NUDGE_L2_MS + NUDGE_L3_MS) {
       const reps = nudges.filter(n => n.card === c.key && n.level === 3 && n.beat_t === c.last_beat_t && !n.closed_at);
       const prev = reps.length ? reps[reps.length - 1].t : l1.t + NUDGE_L2_MS;
+      if (arch1InboxDepth().backlog > 0 && reps.length >= 1) continue;
       if (now - prev >= NUDGE_L3_MS) mk(3, tgt, 'repeat', `nudge:${c.key}:L3:${c.last_beat_t}:${reps.length + 1}`);
     }
   }
@@ -1595,6 +1605,7 @@ function mergedHeader(now = Date.now()) {
   h.cloud_agents = foldOpenCloudTurns(cloudAgentBoard(), now);   // first-class board rows: bcId, seat, card, state, last update
     if (h.board) {
     if (ownerName()) h.board.stats = { ...(h.board.stats || {}), ...ownerPromptStats(now) };
+    if (h.board.stats) h.board.stats.arch1_backlog = arch1InboxDepth().backlog;
     h.board.cloud_agents = h.cloud_agents;
     if (Array.isArray(h.board.cards)) h.board.cards = stampCriticCloud(h.board.cards, h.cloud_agents);
   }

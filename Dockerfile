@@ -5,7 +5,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 tzdata ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package.json server.mjs health-exit.mjs presence.mjs source.mjs archive.mjs origin.mjs routes.mjs governor.mjs arch1-launch.mjs worktrack.mjs handoff.mjs wave-schedule.mjs bifrost-waves.json chicago-stamp.mjs pr-batch.mjs wake-gate.mjs docker-entrypoint.sh ./
+COPY package.json server.mjs health-exit.mjs presence.mjs source.mjs archive.mjs origin.mjs routes.mjs governor.mjs arch1-launch.mjs worktrack.mjs handoff.mjs wave-schedule.mjs bifrost-waves.json chicago-stamp.mjs pr-batch.mjs wake-gate.mjs inbox-queue.mjs docker-entrypoint.sh ./
 COPY public ./public
 COPY collector ./collector
 # One line, the house config name:. Committed so the image COPY succeeds.

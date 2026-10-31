@@ -445,7 +445,7 @@ main { max-width: 1560px; }
 .wave-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
 .wave-head b { color: var(--head-strong); font-size: 13px; letter-spacing: .04em; }
 #waveToggle { display: none; }
-.wave-stats { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 6px; }
+.wave-stats { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 6px; }
 .wstat { display: flex; flex-direction: column; align-items: center; padding: 3px 2px; border: 1px solid var(--stat-line); border-radius: 6px; background: var(--stat-bg); color: var(--text); width: 100%; }
 button.wstat { font: inherit; cursor: pointer; }
 button.wstat.on { outline: 2px solid var(--focus); background: var(--panel); }
@@ -1485,16 +1485,18 @@ footer a { color: var(--foot); }
       var extra = ids.length - shown.length;
       return shown.join(', ') + (extra > 0 ? ' +' + extra + ' more' : '');
     }
-    var statKeys = ['issues_opened_24h', 'issues_closed_24h', 'prs_opened_24h', 'prs_merged_24h', 'prs_closed_unmerged_24h', 'owner_prompts_24h', 'open_total'];
+    var statKeys = ['issues_opened_24h', 'issues_closed_24h', 'prs_opened_24h', 'prs_merged_24h', 'prs_closed_unmerged_24h', 'owner_prompts_24h', 'arch1_backlog', 'open_total'];
     if (S) [['issues opened', S.issues_opened_24h, S.issues_opened_24h_ids], ['issues closed', S.issues_closed_24h, S.issues_closed_24h_ids],
       ['PRs opened', S.prs_opened_24h, S.prs_opened_24h_ids], ['PRs merged', S.prs_merged_24h, S.prs_merged_24h_ids],
       ['PRs closed unmerged', S.prs_closed_unmerged_24h, S.prs_closed_unmerged_24h_ids],
       ['owner prompts', S.owner_prompts_24h, S.owner_prompts_24h_ids, S.owner_prompts_24h_bytes],
+      ['arch1 backlog', S.arch1_backlog],
       ['open now', S.open_total]].forEach(function (x, i) {
       var key = statKeys[i];
-      var d = wbEl('button', 'wstat' + (i === statKeys.length - 1 ? ' total' : '') + (wb.statFilter === key ? ' on' : ''));
+      var d = wbEl('button', 'wstat' + (key === 'open_total' ? ' total' : '') + (wb.statFilter === key ? ' on' : ''));
       d.type = 'button'; d.setAttribute('aria-pressed', wb.statFilter === key ? 'true' : 'false');
-      var label = x[0] === 'owner prompts' ? x[0] : x[0] + (i < statKeys.length - 1 ? ' 24h' : '');
+      var noDay = key === 'owner_prompts_24h' || key === 'open_total' || key === 'arch1_backlog';
+      var label = noDay ? x[0] : x[0] + ' 24h';
       d.appendChild(wbEl('b', '', String(x[1] == null ? '–' : x[1]))); d.appendChild(wbEl('small', '', label));
       if (x[2] && x[2].length) d.title = idTitle(x[2]);
       if (x[3] != null) d.title = (d.title ? d.title + ' · ' : '') + x[3] + ' bytes';
@@ -1506,6 +1508,7 @@ footer a { color: var(--foot); }
     if (wb.statFilter && S) {
       if (countedView) cards = countedIds.map(function (id) { return cardForCountedId(id, cards); });
       else if (wb.statFilter === 'open_total') cards = cards.filter(function (c) { return c.state !== 'closed' && c.stage !== 'done'; });
+      else if (wb.statFilter === 'arch1_backlog') cards = [];
     }
     cards.forEach(function (c) { c._bucket = laneBucket(c); });
     wb.cards = cards;
