@@ -273,6 +273,51 @@
     if (!want) return false;
     return L.cardNamedByWork(fleet, want);
   };
+  // Outside / CLI seats are rarely working, so cardInWork does not refresh their stall.
+  // Freshness is the newest comment, push, or close by that seat on this card.
+  L.OUTSIDE_SEATS = { arch1: 1 };
+  L.OUTSIDE_LOGIN = { arch1: 'arch1', arch10x: 'arch1', 'arch10x[bot]': 'arch1', 'git:arch1': 'arch1' };
+  L.STALL_MS = 60 * 60 * 1000;
+  L.STALL_KIND = { comment: 1, pr_comment: 1, issue_comment: 1, review_comment: 1, pr_review: 1, review: 1,
+    pr_commit: 1, pr_update: 1, pr_force_push: 1, push: 1, issue_close: 1, pr_close: 1, merged: 1 };
+  L.outsideSeatOf = function (e) {
+    if (!e) return '';
+    var keys = ['from', 'actor', 'author', 'credit', 'merged_by'];
+    for (var i = 0; i < keys.length; i++) {
+      var raw = String(e[keys[i]] || '').trim().toLowerCase();
+      if (!raw) continue;
+      if (L.OUTSIDE_SEATS[raw]) return raw;
+      if (L.OUTSIDE_LOGIN[raw]) return L.OUTSIDE_LOGIN[raw];
+      if (raw.slice(-5) === '[bot]' && L.OUTSIDE_LOGIN[raw.slice(0, -5)]) return L.OUTSIDE_LOGIN[raw.slice(0, -5)];
+      if (raw.indexOf('git:') === 0 && L.OUTSIDE_SEATS[raw.slice(4)]) return raw.slice(4);
+    }
+    return '';
+  };
+  L.freshOutsideCards = function (cards, events, now) {
+    now = now || Date.now();
+    return (cards || []).map(function (c) {
+      if (!c || c.pinned) return c;
+      var owner = String(c.owner || '').trim().toLowerCase();
+      if (!L.OUTSIDE_SEATS[owner]) return c;
+      var want = L.cardWorkKey(c);
+      if (!want) return c;
+      var best = 0;
+      (events || []).forEach(function (e) {
+        if (!e || !L.STALL_KIND[e.kind]) return;
+        if (L.outsideSeatOf(e) !== owner) return;
+        var key = L.workOnKey(String(e.repo || '') + '#' + e.number);
+        if (key !== want) return;
+        var t = typeof e._t === 'number' ? e._t : Date.parse(e.t_ct || '');
+        if (t > best) best = t;
+      });
+      if (!(best > 0)) return c;
+      var beat = Math.max(Number(c.last_beat_t) || 0, best);
+      var live = L.statusId(c.state) === 'live';
+      var stall = live && (now - beat > L.STALL_MS);
+      if (beat === Number(c.last_beat_t) && !!c.stall === stall) return c;
+      return Object.assign({}, c, { last_beat_t: beat, stall: stall });
+    });
+  };
   L.rosterKept = function (rows, feed) {
     var fleet = feed && feed.fleet;
     var seats = fleet && fleet.seats;

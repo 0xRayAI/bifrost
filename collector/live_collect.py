@@ -100,8 +100,21 @@ def _human_aliases() -> dict:
     return {p: "Blaze" for p in re.split(r"[\s,]+", raw.strip()) if p}
 
 
+def _fleet_nodes_file() -> dict:
+    """Committed login map. It wins over LIVE_NODE_MAP for every login it names (presence.fleetConfigOf)."""
+    path = Path(__file__).resolve().parent / "fleet-nodes.json"
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if isinstance(v, str) and v}
+
+
 NODE.update(_human_aliases())
 NODE.update(_node_map_env())   # an explicit LIVE_NODE_MAP login wins over HUMAN_ALIASES
+NODE.update(_fleet_nodes_file())   # committed fleet-nodes.json wins over that env for its own logins
 NODE_LC = {k.lower(): v for k, v in NODE.items()}   # logins are case-insensitive (lead-alt / lead-alt)
 ALIAS = {"lead-alt": "Lead", "lead-login": "Lead"}   # stored node names from before the fold
 # Cursor cloud agents (cursoragent, cursor-agent, ...); Bugbot (cursor[bot]) is NOT one of them
@@ -196,11 +209,16 @@ def ci_from_seat(event) -> str | None:
 
 def node(login: str | None) -> str:
     """Mesh node for an actor. Unknown actors (e.g. Tester's new App) are kept as 'Others' + actor=login.
-    A git author whose name is a seat (no User login) is that seat, not Others."""
+    A git author whose name is a seat (no User login) is that seat, not Others.
+    arch10x and arch10x[bot] are the same login."""
     if login and CLOUD_AGENT_RE.match(login):
         return "CloudAgents"
     low = (login or "").lower()
     mapped = NODE_LC.get(low)
+    if not mapped and low.endswith("[bot]"):
+        mapped = NODE_LC.get(low[:-5])
+    if not mapped and low and not low.endswith("[bot]"):
+        mapped = NODE_LC.get(low + "[bot]")
     if mapped:
         return mapped
     if low.startswith("git:") and low[4:] in SEAT_GIT_NAMES:   # a GitHub login is never a seat by name
@@ -552,6 +570,12 @@ class RepoCollector:
                     e["from"] = seat
             if e.get("from") == "Others" and CLOUD_AGENT_RE.match(str(e.get("actor") or e.get("author") or "")):
                 e["from"] = "CloudAgents"   # cloud-agent writes stored before the Cloud agents node existed
+            # A comment or push stored as GitHub still names the actor. Outside seats (arch10x) are not
+            # working, so this relabel is what lets that card's stall clock move. CI keeps its own rule above.
+            if login and e.get("kind") not in CI_KINDS and e.get("from") in ("GitHub", "Others"):
+                mapped = node(login)
+                if mapped not in ("Others", "GitHub", "CI", "", live_site.SITE["node"]):
+                    e["from"] = mapped
             # A merge is a fact about the pull. An unmapped merger (cursor[bot] -> Others) must not drop it.
             if e.get("kind") == "merged" and e.get("from") == "Others":
                 e["from"] = "GitHub"

@@ -65,9 +65,29 @@ class Flow:
             return self.author[(repo, int(n))]
         return self.sha_author.get((repo, e.get("sha") or e.get("head_sha")))
 
+    def write_actor(self, e):
+        """Who wrote. A GitHub-labeled row still counts when the actor login maps to a seat.
+
+        Outside seats are rarely `working`. Dropping the row as Others is what left their stall
+        cards quiet after a comment or push. A stranger stays Others and fleet_only drops it.
+        """
+        frm = e.get("from")
+        if frm not in (None, GH):
+            return frm
+        for key in ("actor", "author", "credit", "merged_by"):
+            login = e.get(key)
+            if not isinstance(login, str) or not login.strip():
+                continue
+            mapped = self.node(login.strip())
+            if mapped and mapped not in (GH, "Others", "CI", ""):
+                return mapped
+        if e.get("hops") == [GH]:
+            return GH
+        return "Others"
+
     def hops(self, e):
         k, frm, to = e["kind"], e.get("from"), e.get("to")
-        actor = frm if frm not in (None, GH) else (GH if e.get("hops") == [GH] else "Others")   # re-apply safe
+        actor = self.write_actor(e)
         if k in DEPLOY_KINDS:
             return [RW, self.host(e.get("repo"), e.get("sha"))]
         if k in CI_KINDS:

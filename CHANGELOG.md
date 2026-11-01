@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An outside seat's stall card follows that seat's comment, push, or close on the card. A prompt with no working_on still does not spin every card that seat owns.
 - Sync the live app to xray `house/live/app` at `f2008613`. A critic ready or green head rings the owner's chat after the inbox wake. The image COPY list includes `chat-doorbell.mjs`. Chat keys stay in env.
 - Sync the live app to xray `house/live/app` at `bc0a635e`. A card spins only when a seat's working_on names it, or a running cloud row is bound to it. A prompt pulse with no working_on does not spin every card that seat owns.
 - Sync the live app to xray `house/live/app` at `a0090056` (includes the Arch1 backlog tile). `/healthz` keeps `arch1_inbox` `{open, head, backlog}`. Collector modules are recommitted from that tree's assemble sources. `arch1_launch` stays off.

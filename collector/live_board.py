@@ -331,14 +331,23 @@ def _login_seat(login):
 
 
 def event_seat(e):
-    """Seat for a beat when from is GitHub or Others and the actor maps to a fleet seat."""
+    """Seat for a beat when from is GitHub or Others and the actor maps to a fleet seat.
+
+    arch10x and arch10x[bot] are one login. git:arch1 is the CLI author with no GitHub user.
+    Seat `working` is not consulted. Outside seats are rarely working.
+    """
     for key in ("from", "credit", "actor", "author", "merged_by"):
         raw = str((e or {}).get(key) or "").strip()
         if not raw:
             continue
+        low = raw.lower()
+        if low.startswith("git:") and fleet_from(low[4:]):
+            return low[4:]
         if fleet_from(raw):
-            return raw.lower()
-        mapped = _login_seat(raw)
+            return low
+        mapped = _login_seat(raw) or _login_seat(low + "[bot]")
+        if not mapped and low.endswith("[bot]"):
+            mapped = _login_seat(low[:-5])
         if mapped and fleet_from(mapped):
             return mapped.lower()
     return ""
@@ -866,7 +875,13 @@ def model(extra_events=None, now=None, prompts=None, held=None):
             c["_parked_c"] = False                         # a newer beat or a non-'Parked:' comment unparks it
             if c.get("_hold") and str(e.get("from") or "") == str(c.get("owner") or ""):
                 c["_hold"] = None
-        if not w and kind in ("pr_comment", "issue_comment", "pr_review"):
+        if not w and kind == "push" and not (c["_closed"] or c.get("_merged_t")):
+            seat = event_seat(e)
+            owner = str(c.get("owner") or "")
+            # A push event on this card. Outside seats have no working pulse, so the push is the beat.
+            if seat and (seat == owner.lower() or fleet_from(seat)):
+                w = "pushed"
+        if not w and kind in ("comment", "pr_comment", "issue_comment", "pr_review"):
             who = str(e.get("from") or "")
             # the owner, or any other fleet seat. a stranger (Others) is not a beat.
             if who == c["owner"] or (fleet_from(who) and not (c["_closed"] or c.get("_merged_t"))):
@@ -876,7 +891,7 @@ def model(extra_events=None, now=None, prompts=None, held=None):
                         c["_resolved"] = "owner says resolved"
                 else:
                     w = "comment"
-        if not w and kind in ("pr_comment", "issue_comment", "pr_review", "review_comment") and not (c["_closed"] or c.get("_merged_t")):
+        if not w and kind in ("comment", "pr_comment", "issue_comment", "pr_review", "review_comment") and not (c["_closed"] or c.get("_merged_t")):
             seat = event_seat(e)
             owner = str(c.get("owner") or "")
             if seat and (seat == owner.lower() or fleet_from(seat)):
