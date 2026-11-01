@@ -47,6 +47,22 @@ class NextOwnerRoute(unittest.TestCase):
         self.assertNotIn(body, json.dumps(event))
         self.assertIn("critic", seats(event))
 
+    def test_a_later_packet_routes_the_new_seat(self):
+        event = {
+            "id": "0xRayAI/xray#804:comment:9",
+            "t_ct": "2026-11-01T16:00:00-06:00",
+            "from": "critic",
+            "actor": "critic0x[bot]",
+            "kind": "pr_comment",
+            "label": "critic0x[bot] comment · xray #804",
+            "repo": "0xRayAI/xray",
+            "number": 804,
+            "packet": {"next owner": "arch1"},
+        }
+        lines = inbox_pass._direct_all(event, ROLES)
+        reasons = [(line.get("seat"), line.get("reason")) for line in lines]
+        self.assertIn(("arch1", "packet next owner"), reasons)
+
     def test_a_new_pull_still_reaches_critic_as_a_review_ask(self):
         event = {
             "id": "0xRayAI/xray#1:open",

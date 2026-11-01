@@ -1007,6 +1007,14 @@ def model(extra_events=None, now=None, prompts=None, held=None):
             stage = "merge"                                # PASS at the current head + green CI: Builder merges
             c["nudge_to"], c["nudge_via"] = "builder", "merge (Reviewer PASS at head)"
             pk["next owner"] = "Builder"
+        elif not merged and state == "live" and crit and crit["what"].startswith("Reviewer FIX") and at_head:
+            author = str(c.get("owner") or "").strip()
+            if author and author not in ("-", "GitHub", "github"):
+                pk["next owner"] = author
+                c["nudge_to"], c["nudge_via"] = author.lower(), "fix (Reviewer FIX at head)"
+        elif not merged and state == "live" and crit and head and not at_head:
+            pk["next owner"] = "critic"
+            c["nudge_to"], c["nudge_via"] = "critic", "new head"
         elif not merged and re.search(r"tester", str(pk.get("next owner") or ""), re.I):
             c["nudge_to"], c["nudge_via"] = "builder", "unmerged (Tester only retests after merge)"
         hold = c.pop("_hold", None)
