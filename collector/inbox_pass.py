@@ -207,6 +207,9 @@ def _direct_all(event, roles):
     tagged = [m for m in event.get("mentions") or [] if isinstance(m, str)]
     if tagged:   # @handles the collector read from the body (handles only, the body is never carried)
         hay += " " + " ".join("@" + m for m in tagged)
+    asks = [a for a in (event.get("asks") or []) if isinstance(a, str)]
+    if asks:   # phrases found in the body; the body itself is not on the event
+        hay += " " + " ".join(asks)
     for seat, r in (roles.get("extra_seats") or {}).items():
         if not isinstance(r, dict) or not r:
             continue
@@ -214,7 +217,8 @@ def _direct_all(event, roles):
         if hit and kind == "op_deploy":
             hit = str(event.get("status") or "").upper() in ("SUCCESS", "CRASHED", "FAILED", "FAILURE", "ERROR", "REMOVED")
         hit = hit or (kind == "merged" and str(event.get("base") or "").casefold() in [b.casefold() for b in r.get("merge_bases") or []])
-        hit = hit or (kind.startswith("issue") or "comment" in kind) and any(inbox._has(hay, n) for n in r.get("needles") or [])
+        text_kind = kind.startswith("issue") or "comment" in kind or kind in ("pr_open", "pr_update", "issue_open")
+        hit = hit or text_kind and any(inbox._has(hay, n) for n in r.get("needles") or [])
         mention_hay = " ".join("@" + m for m in tagged)
         hit = hit or bool(mention_hay) and any(inbox._has(mention_hay, n) for n in r.get("needles") or [])
         if hit:
