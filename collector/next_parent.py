@@ -37,8 +37,8 @@ def r_seat(body):
 
 def parent_door(bodies, done, open_nums=None):
     """bodies maps an issue number to its body, in the pull's ref order.
-    A child that is itself one of those issues is a cross-link. Follow it.
-    The doorbell names the last issue in that chain and that issue's next open child.
+    The next card is that issue's next open child.
+    When that child is also one of these issues, the doorbell stops on the child.
     When open_nums is set, a child counts only if that issue is still open."""
     closed = {int(n) for n in done}
     found = []
@@ -53,9 +53,10 @@ def parent_door(bodies, done, open_nums=None):
     if not found:
         return None
     by_parent = {row["parent"]: row for row in found}
-    row = found[0]
-    seen = set()
-    while row["next"] in by_parent and row["parent"] not in seen:
-        seen.add(row["parent"])
-        row = by_parent[row["next"]]
-    return row
+    # The parent is a ref that names another fetched issue. Stop on that child.
+    pointed = {row["next"] for row in found if row["next"] in by_parent}
+    roots = [row for row in found if row["next"] in by_parent and row["parent"] not in pointed]
+    if roots:
+        return roots[0]
+    plain = [row for row in found if row["parent"] not in pointed]
+    return (plain or found)[0]

@@ -845,12 +845,16 @@ function itemClosed(repo, number) {
 function lineCard(l) {
   return bfCards.find(x => x.repo && String(x.repo).toLowerCase() === String(l.repo || '').toLowerCase() && Number(x.number) === Number(l.number));
 }
-function queueOpts() {
-  return { titleOf: (line) => { const card = lineCard(line); return card && card.title ? String(card.title) : ''; } };
+function queueOpts(seat) {
+  return {
+    ...(seat ? { seat } : {}),
+    cardOf: (line) => lineCard(line) || null,
+    titleOf: (line) => { const card = lineCard(line); return card && card.title ? String(card.title) : ''; },
+  };
 }
 function arch1InboxDepth() {
   const rows = Array.isArray(seatInbox.arch1) ? seatOpenRows('arch1', false) : [];
-  const head = queueView(rows, queueOpts());
+  const head = queueView(rows, queueOpts('arch1'));
   return { open: rows.length, head: head.length, backlog: Math.max(0, rows.length - head.length) };
 }
 function lineDone(seat, l) {
@@ -920,7 +924,7 @@ const NUDGE_LINE_MS = Math.max(1, Number(process.env.NUDGE_LINE_S) > 0 ? Number(
 function nudgeLines(now) {
   let changed = false;
   const open = new Set();
-  for (const seat of SEAT_IDS) for (const l of nudgeTargets(openLines(seat), queueOpts())) {
+  for (const seat of SEAT_IDS) for (const l of nudgeTargets(openLines(seat), queueOpts(seat))) {
     if (itemClosed(l.repo, l.number)) continue;
     const closedCard = lineCard(l);
     if (closedCard && closedCard.state === 'closed') continue;
@@ -1061,7 +1065,7 @@ function postSeatLines(parsed, onlySeat) {
     const s = canonSeat(l.seat), arr = seatInbox[s]; if (!arr || arr.some(x => x.id === l.id)) continue;
     let stored = { ...l, seat: s };
     for (const k of ['from', 'to', 'kind', 'flag']) if (typeof stored[k] === 'string') stored[k] = stored[k].toLowerCase();
-    if (s === 'arch1') stored = markShed(stored, seatOpenRows(s, false), queueOpts());
+    if (s === 'arch1') stored = markShed(stored, seatOpenRows(s, false), queueOpts(s));
     arr.push(stored); touched.add(s); added++; fresh.push(stored);
     if (s === 'builder') { const c = seatInbox['builder-cloud']; if (!c.some(x => x.id === l.id)) { const copy = { ...stored, seat: 'builder-cloud' }; c.push(copy); touched.add('builder-cloud'); fresh.push(copy); } } }
   for (const s of touched) saveSeatInbox(s);
@@ -3782,7 +3786,7 @@ async function handle(req, res) {
     const queue = url.searchParams.get('queue') === '1', backlog = url.searchParams.get('backlog') === '1';
     const base = since && seatInbox[who].some(l => l.id === since) ? linesAfter(seatInbox[who], since) : seatInbox[who];
     const rows = seatOpenRows(who, stale ? false : all);
-    const opts = queueOpts();
+    const opts = queueOpts(who);
     const head = queueView(rows, opts);
     const view = (all || stale) ? rows : (backlog ? backlogOf(rows, opts) : (queue ? head : rows));
     const keep = new Set(view.map(l => l.id)); touchSeat(who);
