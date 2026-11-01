@@ -103,7 +103,6 @@ export function queueView(lines, opts = {}) {
   const rest = rows.filter((row) => row.rank === 1 && !row.priority && !row.line.shed).sort(newestFirst).slice(0, opts.nudge ? 0 : wip).map((row) => row.line);
   const head = [...ready, ...priority, ...rest];
   if (head.length) return head;
-  if (seat) return [];
   const real = pick(rows, 2);
   if (real.length) return real;
   const nudge = pick(rows, 3);
