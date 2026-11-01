@@ -23,6 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine } from './wake-gate.mjs';
+import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
 import { openHistory } from './history-store.mjs';
@@ -391,6 +392,7 @@ function loadSeatWebhooks() {
   return out;
 }
 const SEAT_WEBHOOKS = loadSeatWebhooks();
+const CHAT_DOORBELL = loadChatDoorbells(process.env, SEAT_IDS);
 const wakeQ = new Map();
 const wakeState = createWakeState();
 const turnTimers = new Map();
@@ -638,6 +640,32 @@ function wakeDetail(text, key, url) {
   for (const x of [key, url, url.split('/').pop()]) if (x && x.length >= 6) t = t.split(x).join('[redacted]');
   return t.replace(/(crsr|key|sk)[_-][A-Za-z0-9_-]{8,}/gi, '[redacted]').slice(0, 160);
 }
+async function ringCriticDoorbell(seat, batch) {
+  const heads = criticHeads(batch, seat);
+  if (!heads.length) return;
+  const cfg = CHAT_DOORBELL.critic;
+  for (const head of heads) {
+    const message = seatMessage(head);
+    let result;
+    try {
+      result = cfg
+        ? await postSeatMessage(cfg, message, process.env)
+        : { ok: false, error: 'no_chat', attempts: 0 };
+    } catch {
+      result = { ok: false, error: 'network', attempts: 1 };
+    }
+    const why = result.ok ? '' : ' ' + (result.error || 'network');
+    console.log(`doorbell: critic ${result.ok ? 'ok' : 'fail'} ${message.card}${why}`);
+    try {
+      appendDoorbell(STATE_DIR, {
+        seat: message.seat, kind: message.kind, card: message.card, repo: message.repo,
+        number: message.number, sha: message.sha, url: message.url, note: message.note,
+        ok: !!result.ok, error: result.ok ? '' : String(result.error || 'network'),
+        t_ct: new Date().toISOString(),
+      });
+    } catch { /* the chat post already finished or was refused */ }
+  }
+}
 async function flushWake(seat) {
   const st = wakeQ.get(seat), cfg = SEAT_WEBHOOKS[seat];
   if (!st || st.inflight || !st.pending.length || !cfg) return;
@@ -673,6 +701,7 @@ async function flushWake(seat) {
       ...(outcome === 'failed' ? { error: String(result.error || 'network').slice(0, 40) } : {}),
     });
   } catch (e) { console.log('wake: append failed ' + ((e && e.code) || 'write')); }
+  try { await ringCriticDoorbell(seat, batch); } catch { /* the inbox wake already finished */ }
   armWake(seat);
   try { publishHeader(); } catch { /* the inbox line is already durable */ }
 }
