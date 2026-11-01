@@ -842,6 +842,13 @@ class Fleet:
                     continue
                 if not isinstance(d, dict):
                     continue
+                if d.get("kind") in ("cloud_agent", "agent"):
+                    # Same launch/finish lines the board's cloud_agents list reads.
+                    self._cloud_line({
+                        "t_ct": d.get("t_ct"), "by": d.get("seat") or d.get("by") or "",
+                        "action": d.get("action"), "agent": d.get("agent"),
+                        "tag": d.get("tag"), "pr": d.get("pr"),
+                    }, "local-cloud" not in self.seeded, now, "live/activity")
                 seat, kind, action, t = seat_of(d.get("seat")), d.get("kind"), d.get("action"), _ts(d.get("t_ct"))
                 if seat not in SEATS or not isinstance(kind, str) or t is None or t > now + 300:
                     continue
@@ -860,6 +867,7 @@ class Fleet:
         for key, t in list(A.get("open", {}).items()):
             if now - t > WORKING_LOCAL_S:
                 A["open"].pop(key, None)
+        self.seeded.add("local-cloud")
 
     def scan_activity(self):
         f = self.path.parent.parent / "fleet" / "remote-activity.jsonl"
