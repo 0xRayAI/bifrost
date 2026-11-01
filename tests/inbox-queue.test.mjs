@@ -62,12 +62,16 @@ test('hotfix on the packet is read before an older P0, and P0 before P1', () => 
   assert.deepEqual(queueView([p1, p0, hot], { seat: 'arch1', cardOf }).map((row) => row.id), ['hot', 'p0', 'p1']);
 });
 
-test('a titled P1 is not the head when no card names this seat', () => {
-  const noise = line('p', { title: 'P1: wake path', number: 384, t: '2026-10-30T11:00:00Z' });
+test('open work with no R packet stays on the head when that head would otherwise be empty', () => {
+  const noise = line('p', { title: 'still open', number: 384, t: '2026-10-30T11:00:00Z' });
   const opts = { seat: 'arch1', cardOf: () => null };
-  assert.deepEqual(queueView([noise], opts).map((row) => row.id), []);
-  assert.equal(markShed(noise, [noise], opts).shed, true);
-  assert.deepEqual(nudgeTargets([noise], opts).map((row) => row.id), []);
+  assert.deepEqual(queueView([noise], opts).map((row) => row.id), ['p']);
+  assert.equal(markShed(noise, [noise], opts).shed, undefined);
+  assert.deepEqual(nudgeTargets([noise], opts).map((row) => row.id), ['p']);
+  const ready = line('h', { type: 'packet', kind: 'ready', title: 'handoff ready', t: '2026-10-30T12:00:00Z' });
+  const head = queueView([noise, ready], opts).map((row) => row.id);
+  assert.equal(head.includes('h'), true);
+  assert.equal(head.includes('p'), false);
 });
 
 test('a plain card whose packet names this seat stays on the head and is laddered', () => {
