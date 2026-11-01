@@ -1570,6 +1570,7 @@ footer a { color: var(--foot); }
       d.addEventListener('click', function () { wb.statFilter = wb.statFilter === key ? '' : key; wb.key = ''; renderWave(true); });
       strip.appendChild(d); });
     var cards = L.boardAt(wb.allCards || wb.cards, asOf);
+    if (asOf == null && L.freshOutsideCards) cards = L.freshOutsideCards(cards, state.events, Date.now());
     var countedIds = wb.statFilter && S ? S[wb.statFilter + '_ids'] : null;
     var countedView = Array.isArray(countedIds);
     if (wb.statFilter && S) {
