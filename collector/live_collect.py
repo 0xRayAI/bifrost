@@ -70,6 +70,36 @@ def mentions(body: str | None) -> list | None:
     return out or None
 
 
+def phrase_asks(body: str | None) -> list | None:
+    """Role-file phrases found in the body. The body itself is never stored."""
+    text = re.sub(r"```.*?```|`[^`]*`", " ", body or "", flags=re.S).casefold()
+    if not text.strip():
+        return None
+    found = []
+    for needle in _phrase_needles():
+        if needle.casefold() in text and needle not in found:
+            found.append(needle)
+    return found[:10] or None
+
+
+def _phrase_needles() -> list:
+    path = Path(__file__).resolve().parent / "routing" / "inbox-roles.json"
+    try:
+        roles = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    out = []
+    seats = roles.get("extra_seats") if isinstance(roles.get("extra_seats"), dict) else {}
+    for rule in seats.values():
+        if not isinstance(rule, dict):
+            continue
+        for needle in rule.get("needles") or []:
+            text = str(needle or "").strip()
+            if text and not text.startswith("@") and text not in out:
+                out.append(text)
+    return out
+
+
 SHA_RE = re.compile(r"@\s*`?([0-9a-f]{7,40})\b")
 
 
@@ -1064,7 +1094,7 @@ class RepoCollector:
             self.put(f"{self.repo}#{n}:open", p["created_at"], shown_from(login), "GitHub", "pr_open",
                      f"{self.short} #{n} opened · {p['title']}", url, n, base=p["base"]["ref"], actor=login or None,
                      sha=head, head_ref=head_ref, author=login or None,
-                     draft=p.get("draft"), mentions=mentions(p.get("body")), **fields)
+                     draft=p.get("draft"), mentions=mentions(p.get("body")), asks=phrase_asks(p.get("body")), **fields)
             if p.get("merged_at"):
                 listed = p.get("merged_by") if isinstance(p.get("merged_by"), dict) else None
                 listed_login = (listed or {}).get("login")
@@ -1396,7 +1426,7 @@ class RepoCollector:
             self.st.setdefault("issues", {})[str(n)] = login
         self.put(eid, created, shown_from(login), "GitHub", "pr_open" if is_pr else "issue_open",
                  label, url, n, actor=login or None, mentions=mentions(item.get("body")),
-                 author=login or None, **card_fields(item))
+                 asks=phrase_asks(item.get("body")), author=login or None, **card_fields(item))
 
     def backfill_open_cards(self, c, limit=30):
         """Each pass fetches open numbers that still have no open event, up to limit. An empty miss list does not latch."""
@@ -1484,7 +1514,7 @@ class RepoCollector:
                      actor=login, resolved=True if RESOLVED_RE.search(body) else None,   # flags only
                      parked=True if PARKED_COMMENT_RE.match(body) else None,
                      start_after=comment_start_after(body),
-                     hold=hold, mentions=mentions(body), packet=packet,
+                     hold=hold, mentions=mentions(body), asks=phrase_asks(body), packet=packet,
                      pr_merged=self.pr_merged(n) if is_pr else None)
             if is_pr:
                 self.st.setdefault("enrich", {})[str(n)] = True   # a comment is a reason to re-read reviews
