@@ -26,6 +26,10 @@ That runs the Dockerfile copy check, the collector guard, and the `/healthz` che
 
 Forge connects the burst-live service to this repo after critic PASS on the SHA. Do not run `railway up` from a laptop. `deploy.sh` refuses.
 
+## Roster
+
+A chip is a key of `fleet.seats`. `product_nodes` may also appear (CloudAgents). Until that seat map exists, the configured strip stays. A seat with no signal for 7 days is dormant, not a live slot.
+
 ## Working lights
 
 A push, merge, or review lights that seat on the mesh for `LIVE_TURN_OPEN_MIN` minutes (default 20). The actor has to be in `collector/fleet-nodes.json` or the login on `collector/routing/inbox-roles.json`. `arch10x[bot]` is Arch1.

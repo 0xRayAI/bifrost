@@ -68,7 +68,33 @@ test('roster seen is not working, and working matches the mesh bit', () => {
   assert.equal(L.cardInWork({ repo: '0xRayAI/xray', number: 2, key: '0xrayai/xray#2', _seat: 'forge' }, pulse), false);
   assert.match(html, /seen · /);
   assert.equal(html.includes('seats active'), false);
-  assert.match(html, /nm\.title = on \? label \+ ' · working' : v\.seen \? label \+ ' · seen'/);
+  assert.match(html, /label \+ ' · dormant' : on \? label \+ ' · working' : v\.seen \? label \+ ' · seen'/);
+});
+
+test('sound without a fleet row is off the roster, and a week-old seat is dormant', () => {
+  const L = { SOURCES: [], AGENTS: [], SEAT_NAMES: [], SATS: {}, COLOR: {}, LABEL: {}, SUB: {}, GLYPH: {}, SQUARE: {},
+    EDGES: [], BOT_IMAGES: [], KIND_WORD: {}, applyFeed: (st, feed) => ({ state: { events: feed.events } }) };
+  new Function('window', 'location', fs.readFileSync(path.join(APP, 'public', 'live-config.js'), 'utf8'))({ LiveMesh: L }, { search: '' });
+  const now = Date.parse('2026-10-28T12:30:00Z');
+  const rows = [['sound', ''], ['forge', ''], ['magnet', ''], ['mill', ''], ['CloudAgents', '']];
+  const feed = {
+    fleet: {
+      seats: {
+        forge: { last_ct: '2026-10-28T12:00:00Z', active: true },
+        magnet: { last_ct: '2026-10-14T12:00:00Z', active: false },
+        mill: { last_ct: '2026-10-15T12:00:00Z', active: false },
+      },
+    },
+    product_nodes: ['CloudAgents'],
+  };
+  assert.deepEqual(L.rosterKept(rows, feed).map((a) => a[0]), ['forge', 'magnet', 'mill', 'CloudAgents']);
+  assert.equal(L.rosterKept(rows, feed).some((a) => a[0] === 'sound'), false);
+  assert.equal(L.seatDormant(feed.fleet.seats.magnet.last_ct, now), true);
+  assert.equal(L.seatDormant(feed.fleet.seats.mill.last_ct, now), true);
+  assert.equal(L.seatDormant(feed.fleet.seats.forge.last_ct, now), false);
+  assert.equal(L.DORMANT_MS, 7 * 24 * 60 * 60 * 1000);
+  assert.match(html, /classList\.toggle\('dormant', dormant\)/);
+  assert.match(html, /label \+ ' · dormant'/);
 });
 
 test('a spinner is only the card in working_on, and a 7-day seat is dormant', () => {

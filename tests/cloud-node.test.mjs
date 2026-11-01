@@ -96,7 +96,7 @@ test('roster working and CloudAgents light the same way on the mesh', () => {
   assert.equal(L.seatState(L.meshWorking(fleet, 'forge'), false, true), 'working');
   assert.equal(L.seatView('working').lit, true);
   const rows = [['forge', 'eng'], ['critic', 'reviewer'], ['herald', '']];
-  assert.deepEqual(L.rosterKept(rows, { fleet: { seats: {} }, product_nodes: ['CloudAgents'] }).map(a => a[0]), ['forge', 'critic', 'herald']);
+  assert.deepEqual(L.rosterKept(rows, { fleet: { seats: {} }, product_nodes: ['CloudAgents'] }).map(a => a[0]), []);
   assert.deepEqual(L.rosterKept(rows, { fleet }).map(a => a[0]), ['forge', 'critic']);
 });
 
