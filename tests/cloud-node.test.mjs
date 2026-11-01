@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stampCloudMesh } from '../worktrack.mjs';
+import { applyCloudOwners, stampCloudMesh } from '../worktrack.mjs';
 
 const APP = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -98,4 +98,26 @@ test('roster working and CloudAgents light the same way on the mesh', () => {
   const rows = [['forge', 'eng'], ['critic', 'reviewer'], ['herald', '']];
   assert.deepEqual(L.rosterKept(rows, { fleet: { seats: {} }, product_nodes: ['CloudAgents'] }).map(a => a[0]), ['forge', 'critic', 'herald']);
   assert.deepEqual(L.rosterKept(rows, { fleet }).map(a => a[0]), ['forge', 'critic']);
+});
+
+test('a cloud finish moves last_ct to that finish and leaves open_agents empty', () => {
+  const finish = '2026-10-28T07:23:00-05:00';
+  const old = '2026-10-27T05:34:00-05:00';
+  const id = 'bc-043681df-9a95-5788-b990-e393349b3d53';
+  const rows = [{ bcId: id, seat: 'critic', state: 'finished', updated_ct: finish }];
+  const fleet = applyCloudOwners({
+    seats: { critic: { working: false } },
+    working: {},
+    cloud: { open_agents: [id], last_ct: old, github_last_ct: old, active: true, working: true },
+  }, rows, Date.parse('2026-10-28T18:00:00Z'));
+  const header = stampCloudMesh({ product_nodes: ['Bifrost'], fleet }, rows);
+  assert.ok(Date.parse(header.fleet.cloud.last_ct) >= Date.parse(finish));
+  assert.deepEqual(header.fleet.cloud.open_agents, []);
+  assert.equal(header.fleet.cloud.working, false);
+  assert.equal(header.fleet.cloud.active, false);
+  const running = [{ bcId: 'bc-running123', state: 'running', updated_ct: finish }];
+  const live = stampCloudMesh({ fleet: { cloud: { open_agents: [], last_ct: old } } }, running);
+  assert.deepEqual(live.fleet.cloud.open_agents, ['bc-running123']);
+  assert.equal(live.fleet.cloud.working, true);
+  assert.ok(Date.parse(live.fleet.cloud.last_ct) >= Date.parse(finish));
 });

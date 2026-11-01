@@ -1731,7 +1731,7 @@ function mergedHeader(now = Date.now()) {
   if (h.fleet) h.fleet = bindSeatWorkToCards(h.fleet);   // working requires an open card once the board has one
   if (h.fleet) h.fleet = stampClockTree(h.fleet);
   if (h.fleet) h.fleet.seat_display = { ...SEAT_DISPLAY, ...jsonEnvObj('SEAT_DISPLAY_NAMES') };
-  Object.assign(h, stampCloudMesh(h));
+  Object.assign(h, stampCloudMesh(h, h.cloud_agents));
   h.freshness = stampClockTree({
     github_latest_ct: githubDataAt ? new Date(githubDataAt).toISOString() : null,
     github_card_latest_ct: githubCardAt ? new Date(githubCardAt).toISOString() : null,

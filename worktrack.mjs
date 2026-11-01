@@ -848,22 +848,54 @@ export function openCloudTurns(lines, now = Date.now()) {
     .sort((a, b) => a.bcId.localeCompare(b.bcId));
 }
 
+/** last_ct is at least the newest cloud_agents row. A finished row leaves open_agents. No rows keeps the previous open set. */
+export function syncCloudClock(cloud, rows) {
+  const prev = cloud && typeof cloud === 'object' && !Array.isArray(cloud) ? cloud : {};
+  const list = (Array.isArray(rows) ? rows : []).filter(row => row && AGENT_ID.test(String(row.bcId || '')));
+  let last = Date.parse(prev.last_ct || '');
+  if (!Number.isFinite(last)) last = 0;
+  const running = [];
+  const finished = [];
+  for (const row of list) {
+    const id = String(row.bcId);
+    if (row.state === 'running') running.push(id);
+    else finished.push(id);
+    for (const key of ['updated_ct', 'finished_ct', 't_ct']) {
+      const t = Date.parse(row[key] || '');
+      if (Number.isFinite(t) && t > last) last = t;
+    }
+  }
+  const kept = (Array.isArray(prev.open_agents) ? prev.open_agents : []).map(id => String(id)).filter(Boolean);
+  const open = list.length
+    ? running.filter(id => !finished.some(gone => cloudIdsAlias(gone, id)))
+    : kept;
+  const prevMs = Date.parse(prev.last_ct || '');
+  const last_ct = last
+    ? (prevMs === last && prev.last_ct ? prev.last_ct : new Date(last).toISOString())
+    : (prev.last_ct || prev.github_last_ct || null);
+  return {
+    ...prev,
+    open_agents: [...new Set(open)].sort(),
+    active: open.length > 0,
+    working: open.length > 0,
+    last_ct,
+  };
+}
+
 /** CloudAgents stays on the mesh. A non-empty open_agents list lights it. An empty list keeps last_ct. */
-export function stampCloudMesh(header) {
+export function stampCloudMesh(header, rows) {
   const h = header && typeof header === 'object' && !Array.isArray(header) ? header : {};
   const nodes = (Array.isArray(h.product_nodes) ? h.product_nodes : []).filter(n => n && n !== 'burst-live');
   if (!nodes.includes('CloudAgents')) nodes.push('CloudAgents');
   const had = h.fleet && typeof h.fleet === 'object' && !Array.isArray(h.fleet) ? h.fleet : null;
   const fleet = had ? { ...had } : {};
   const prev = fleet.cloud && typeof fleet.cloud === 'object' && !Array.isArray(fleet.cloud) ? fleet.cloud : {};
-  const open = (Array.isArray(prev.open_agents) ? prev.open_agents : []).map(id => String(id)).filter(Boolean);
-  const last = prev.last_ct || prev.github_last_ct || null;
-  const cloud = { ...prev, open_agents: open, active: open.length > 0, working: open.length > 0, last_ct: last };
+  const cloud = syncCloudClock(prev, rows);
   const working = { ...(fleet.working || {}) };
-  if (open.length) working.CloudAgents = { ...(working.CloudAgents || {}), via: (working.CloudAgents && working.CloudAgents.via) || 'cloud' };
+  if (cloud.working) working.CloudAgents = { ...(working.CloudAgents || {}), via: (working.CloudAgents && working.CloudAgents.via) || 'cloud' };
   else delete working.CloudAgents;
   const next = { ...fleet, cloud };
-  if (had || open.length) next.working = working;
+  if (had || cloud.open_agents.length) next.working = working;
   return { ...h, product_nodes: nodes, fleet: next };
 }
 
@@ -872,22 +904,11 @@ export function stampCloudMesh(header) {
  * A finished or failed row leaves open_agents. A cloud via mark on a seat is dropped. */
 export function applyCloudOwners(fleet, rows, now = Date.now()) {
   const list = Array.isArray(rows) ? rows : [];
-  const running = list.filter(row => row && row.state === 'running' && AGENT_ID.test(String(row.bcId || '')));
-  if (!fleet && !running.length) return fleet;
+  const known = list.filter(row => row && AGENT_ID.test(String(row.bcId || '')));
+  if (!fleet && !known.length) return fleet;
   const f = fleet
     ? { ...fleet, seats: { ...(fleet.seats || {}) }, working: { ...(fleet.working || {}) }, cloud: { ...(fleet.cloud || {}) } }
     : { as_of: new Date(now).toISOString(), window_min: 15, seats: {}, working: {}, cloud: {}, active: 0, total: 0 };
-  const nonRunning = [];
-  for (const row of list) {
-    if (!row || !AGENT_ID.test(String(row.bcId || ''))) continue;
-    if (row.state !== 'running') nonRunning.push(String(row.bcId));
-  }
-  const open = new Set(
-    (Array.isArray(f.cloud.open_agents) ? f.cloud.open_agents : [])
-      .map(id => String(id))
-      .filter(id => id && !nonRunning.some(gone => cloudIdsAlias(gone, id))),
-  );
-  for (const row of running) open.add(String(row.bcId));
   for (const seat of new Set([...Object.keys(f.working), ...Object.keys(f.seats)])) {
     const held = f.working[seat];
     const src = f.seats[seat];
@@ -904,18 +925,7 @@ export function applyCloudOwners(fleet, rows, now = Date.now()) {
     }
     f.seats[seat] = next;
   }
-  let last = Date.parse(f.cloud.last_ct || '');
-  if (!Number.isFinite(last)) last = 0;
-  let bumped = false;
-  for (const row of list) {
-    if (!row || !AGENT_ID.test(String(row.bcId || ''))) continue;
-    for (const key of ['updated_ct', 'finished_ct', 't_ct']) {
-      const t = Date.parse(row[key] || '');
-      if (Number.isFinite(t) && t > last) { last = t; bumped = true; }
-    }
-  }
-  f.cloud = { ...f.cloud, active: open.size > 0, open_agents: [...open].sort(), working: open.size > 0 };
-  if (bumped) f.cloud.last_ct = new Date(last).toISOString();
+  f.cloud = syncCloudClock(f.cloud, list);
   f.active = Object.values(f.seats).filter(v => v.active && !v.external).length;
   if (!fleet) f.total = Object.keys(f.seats).length;
   return f;
