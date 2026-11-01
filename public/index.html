@@ -1527,7 +1527,7 @@ footer a { color: var(--foot); }
   function cardWorking(c) {
     if (!c || c.pinned || c._bucket === 'done' || c._agentDone || statusId(c.state) === 'closed' || statusId(c.state) === 'parked' || statusId(c.state) === 'held' || statusId(c.stage) === 'done') return false;
     if (!L.cardInWork) return false;
-    return !!L.cardInWork(Object.assign({}, c, { _seat: cardSeat(c) }), window.LIVE_FLEET);
+    return !!L.cardInWork(Object.assign({}, c, { _seat: cardSeat(c) }), window.LIVE_FLEET, wb.cloudAgents);
   }
 
   function readCardGroup() {
