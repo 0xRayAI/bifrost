@@ -43,11 +43,11 @@
       });
     });
   };
-  // Bots (the "a of b bots active" count; the feed's fleet state marks seats active from file mtimes too).
+  // Bots (the "N seen" count; the feed's fleet state marks seats seen from file mtimes too).
   // Coord uses the upstream 'blinky' key. QA = QaOne + QA two + QA (one seat, one stream).
   L.AGENTS.splice(0, L.AGENTS.length, ['Builder', 'builder'], ['Builder-cloud', 'cloud builder'], ['Reviewer', 'gate'], ['Tester', 'lab tester'],
     ['QA', 'lab testers'], ['Operator', 'infra'], ['blinky', 'Coordinator'], ['CloudAgents', 'cloud agents'], ['Assistant', 'emitter']);
-  // Cloud agents is a header seat (ACTIVE/IDLE) but not one of the bots counted in 'N of M bots active'.
+  // Cloud agents is a header seat (SEEN/IDLE) but not one of the bots counted in the seen line.
   L.SEAT_NAMES.splice(0, L.SEAT_NAMES.length, 'Builder', 'Builder-cloud', 'Reviewer', 'Tester', 'QA', 'Operator', 'blinky');
   // Nodes (920 x 400 canvas, hub at 500,200). One product node (product + dev / labtest / prod instances; the
   // instance is a tag on the event label). 'mymuse.house' / 'blinky' / 'X' are upstream's fixed keys,
@@ -217,7 +217,7 @@
   L.seatState = function (working, live, active) {
     return working ? 'working' : live ? 'live' : active ? 'active' : 'idle';
   };
-  var SEAT_WORD = { working: 'WORKING', live: 'LIVE', active: 'ACTIVE', idle: 'IDLE' };
+  var SEAT_WORD = { working: 'WORKING', live: 'SEEN', active: 'SEEN', idle: 'IDLE' };
   L.seatView = function (st) {   // everything the chip and the node show, from that one state
     return {
       word: SEAT_WORD[st] || 'IDLE',

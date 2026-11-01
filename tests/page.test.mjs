@@ -30,6 +30,47 @@ test('stats strip is eight columns, with arch1 backlog before open now and no 24
   assert.match(html, /else if \(wb\.statFilter === 'arch1_backlog'\) cards = \[\];/);
 });
 
+test('roster seen is not working, and working matches the mesh bit', () => {
+  const L = { SOURCES: [], AGENTS: [], SEAT_NAMES: [], SATS: {}, COLOR: {}, LABEL: {}, SUB: {}, GLYPH: {}, SQUARE: {},
+    EDGES: [], BOT_IMAGES: [], KIND_WORD: {}, applyFeed: (st, feed) => ({ state: { events: feed.events } }) };
+  new Function('window', 'location', fs.readFileSync(path.join(APP, 'public', 'live-config.js'), 'utf8'))({ LiveMesh: L }, { search: '' });
+  const seen = L.seatView('active');
+  assert.equal(seen.lit, false);
+  assert.equal(seen.seen, true);
+  assert.equal(seen.word, 'SEEN');
+  const live = L.seatView('live');
+  assert.equal(live.word, 'SEEN');
+  assert.equal(live.lit, false);
+  const working = L.seatView('working');
+  assert.equal(working.lit, true);
+  assert.equal(working.word, 'WORKING');
+  assert.equal(working.seen, false);
+  const fleet = {
+    seats: {
+      forge: { active: true, working: false },
+      herald: { active: true, working: true },
+    },
+    working: { herald: { via: 'prompt' } },
+  };
+  assert.equal(L.meshWorking(fleet, 'forge'), false);
+  assert.equal(L.meshWorking(fleet, 'herald'), true);
+  assert.equal(L.seatState(false, false, true), 'active');
+  assert.equal(L.seatState(true, false, true), 'working');
+  const pulse = {
+    working: { herald: { via: 'prompt', since_ct: '2026-10-28T12:00:00Z' } },
+    seats: { herald: { working: true, working_via: 'prompt' } },
+  };
+  assert.equal(L.cardInWork({ repo: '0xRayAI/xray', number: 1, key: '0xrayai/xray#1', _seat: 'herald' }, pulse), false);
+  assert.equal(L.cardInWork({ repo: '0xRayAI/xray', number: 2, key: '0xrayai/xray#2', _seat: 'forge' }, pulse), false);
+  pulse.working.herald.working_on = '0xRayAI/xray#1';
+  pulse.seats.herald.working_on = '0xRayAI/xray#1';
+  assert.equal(L.cardInWork({ repo: '0xRayAI/xray', number: 1, key: '0xrayai/xray#1', _seat: 'herald' }, pulse), true);
+  assert.equal(L.cardInWork({ repo: '0xRayAI/xray', number: 2, key: '0xrayai/xray#2', _seat: 'forge' }, pulse), false);
+  assert.match(html, /seen · /);
+  assert.equal(html.includes('seats active'), false);
+  assert.match(html, /nm\.title = on \? label \+ ' · working' : v\.seen \? label \+ ' · seen'/);
+});
+
 test('a spinner is only the card in working_on, and a 7-day seat is dormant', () => {
   const L = { SOURCES: [], AGENTS: [], SEAT_NAMES: [], SATS: {}, COLOR: {}, LABEL: {}, SUB: {}, GLYPH: {}, SQUARE: {},
     EDGES: [], BOT_IMAGES: [], KIND_WORD: {}, applyFeed: (st, feed) => ({ state: { events: feed.events } }) };

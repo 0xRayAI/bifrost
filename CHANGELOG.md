@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The roster calls a 15-minute sighting seen, not active. Working is the same bit as the mesh light. A prompt with no card name does not spin every card.
 - A push, merge, or review lights the mapped seat for the turn window, including an Arch1 merge after the card closes. An outside seat missing from the GitHub actor map still needs `live-inbox --turn start/end`.
 - `fleet.cloud.last_ct` follows the same cloud launch and finish lines as `cloud_agents`. A finish moves `last_ct` to that time or later, and `open_agents` is empty when nothing is running.
 - The mesh keeps a CloudAgents node. A non-empty `open_agents` lights it. An empty list leaves the node with `last_ct`. Seat working on the canvas uses the same bit as the roster chip.
