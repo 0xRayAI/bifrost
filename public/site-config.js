@@ -64,9 +64,11 @@
   }
   var kitApply = L.applyFeed;
   L.applyFeed = function (state, feed, nowMs) {
-    if (feed && Array.isArray(feed.product_nodes)) feed.product_nodes.forEach(function (n) { BOARD[n] = 1; });
-    if (feed && Array.isArray(feed.events)) feed = Object.assign({}, feed, { product_nodes: [],
-      events: feed.events.map(retarget).filter(Boolean) });
+    // Bifrost is the board, not a circle. CloudAgents stays a mesh node, so its events are not dropped.
+    if (feed && Array.isArray(feed.events)) {
+      var nodes = Array.isArray(feed.product_nodes) ? feed.product_nodes.filter(function (n) { return n && !BOARD[n]; }) : [];
+      feed = Object.assign({}, feed, { product_nodes: nodes, events: feed.events.map(retarget).filter(Boolean) });
+    }
     return kitApply(state, feed, nowMs);
   };
   L.FROM_FALLBACK = 'GitHub';

@@ -187,6 +187,33 @@
   // ONE derived seat state, used by the header chip text, its dot and the canvas node alike:
   //   working (in-flight spinner) > live (a ping on the board right now) > active (fleet, last 15 min) > idle
   // lit is working only. seen is a recent ping or a 15-minute beat, and it is not the working sheen.
+  // CloudAgents is always a mesh node. Non-empty open_agents lights it. last_ct keeps an empty set visible.
+  L.cloudNode = function (fleet) {
+    var cloud = fleet && fleet.cloud && typeof fleet.cloud === 'object' ? fleet.cloud : null;
+    var open = cloud && Array.isArray(cloud.open_agents) ? cloud.open_agents.filter(Boolean) : [];
+    var last = cloud && (cloud.last_ct || cloud.github_last_ct) || null;
+    return { present: true, lit: open.length > 0, last_ct: last || null, open_agents: open };
+  };
+  L.meshWorking = function (fleet, key) {
+    if (key === 'CloudAgents') return L.cloudNode(fleet).lit;
+    if (!fleet) return false;
+    var names = key === 'blinky' ? ['Coord', 'coord', 'blinky'] : [key, String(key || '').toLowerCase()];
+    var seats = fleet.seats || {}, working = fleet.working || {}, i, name, keys;
+    for (i = 0; i < names.length; i++) {
+      name = names[i];
+      if (working[name]) return true;
+      if (seats[name] && seats[name].working) return true;
+    }
+    var want = String(key || '').toLowerCase();
+    keys = Object.keys(seats);
+    for (i = 0; i < keys.length; i++) {
+      if (String(keys[i]).toLowerCase() !== want) continue;
+      if (seats[keys[i]] && seats[keys[i]].working) return true;
+    }
+    keys = Object.keys(working);
+    for (i = 0; i < keys.length; i++) if (String(keys[i]).toLowerCase() === want) return true;
+    return false;
+  };
   L.seatState = function (working, live, active) {
     return working ? 'working' : live ? 'live' : active ? 'active' : 'idle';
   };
@@ -324,6 +351,8 @@
     if (!seats || typeof seats !== 'object') return rows || [];
     var keys = {};
     Object.keys(seats).forEach(function (k) { keys[String(k).toLowerCase()] = 1; });
+    // An empty seat map is not a fleet yet. The configured roster stays.
+    if (!Object.keys(keys).length) return rows || [];
     var products = {};
     var nodes = feed.product_nodes;
     if (Array.isArray(nodes)) nodes.forEach(function (n) { if (typeof n === 'string' && n) products[n.toLowerCase()] = 1; });
