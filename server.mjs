@@ -35,7 +35,7 @@ import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
-import { queueView, backlogOf, keepStation, nudgeTargets, markShed } from './inbox-queue.mjs';
+import { queueView, backlogOf, nudgeTargets, markShed } from './inbox-queue.mjs';
 const CI_NODES = loadCiNodes();
 const batch = createBatch();
 
@@ -2220,7 +2220,8 @@ function bindSeatWorkToCards(fleet) {
   return { ...fleet, seats, working, active: Object.values(seats).filter(v => v && v.active && !v.external).length };
 }
 setInterval(() => governorRun(), GOV_MS).unref();
-// Weekday half hour. A test bind stays quiet. Railway posts unless STATION_NUDGE=off.
+// Weekday half hour. The board process is the scheduler. A test bind stays quiet.
+// Railway posts unless STATION_NUDGE=off. An open inbox still gets the line.
 let stationPosted = '';
 function stationClock(now) {
   const raw = String(process.env.STATION_NOW || '').trim();
@@ -2241,9 +2242,7 @@ function stationTick(now = new Date()) {
   if (!when) return;
   const due = stationDue(when, stationPosted, SEAT_IDS);
   if (!due) return;
-  const lines = due.lines.filter((line) => keepStation(seatOpenRows(line.seat, false)));
-  if (!lines.length) { stationPosted = due.hour; return; }
-  const r = postSeatLines({ lines }, null);
+  const r = postSeatLines({ lines: due.lines }, null);
   if (r.status !== 200) return;
   stationPosted = due.hour;
   if (r.added) { seq++; header = mergedHeader(); fullDirty = true; }

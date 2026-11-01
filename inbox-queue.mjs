@@ -1,6 +1,7 @@
 // The default seat read is a queue head. Stored lines stay until close, merge, or an ack.
 // Ready handoffs, a hotfix, and P0/P1 are the head. While that head is open, nudges and
-// station lines stay in the backlog. A read does not pop.
+// station lines stay in the backlog. The station tick still stores its hourly line.
+// A read does not pop.
 
 const P_MARK = /\bP[01]\b/;
 const HEAD_KINDS = new Set(['ready', 'merge', 'critic_fail', 'ci_fail', 'live_pass']);
@@ -76,10 +77,6 @@ export function queueView(lines, opts = {}) {
 export function backlogOf(lines, opts = {}) {
   const head = new Set(queueView(lines, opts).map((line) => line && line.id));
   return (Array.isArray(lines) ? lines : []).filter((line) => line && !head.has(line.id));
-}
-
-export function keepStation(lines) {
-  return !(Array.isArray(lines) ? lines : []).some(Boolean);
 }
 
 export function overWip(lines, opts = {}) {
