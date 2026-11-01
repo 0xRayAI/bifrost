@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Sync the live app to xray `house/live/app` at `f2008613`. A critic ready or green head rings the owner's chat after the inbox wake. The image COPY list includes `chat-doorbell.mjs`. Chat keys stay in env.
 - Sync the live app to xray `house/live/app` at `bc0a635e`. A card spins only when a seat's working_on names it, or a running cloud row is bound to it. A prompt pulse with no working_on does not spin every card that seat owns.
 - Sync the live app to xray `house/live/app` at `a0090056` (includes the Arch1 backlog tile). `/healthz` keeps `arch1_inbox` `{open, head, backlog}`. Collector modules are recommitted from that tree's assemble sources. `arch1_launch` stays off.
 - The board shows Arch1 backlog depth before open now. A card that already has an L3 does not get another while that backlog is open. #731 #768.
