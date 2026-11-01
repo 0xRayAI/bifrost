@@ -792,7 +792,7 @@ footer a { color: var(--foot); }
   paintSeatColors();
 
   // seats strip: the name sits on the chip. A click opens the role. The dot is the status.
-  // The chip does not print ACTIVE / WORKING / IDLE.
+  // The chip does not print SEEN / WORKING / IDLE. The title does.
   // The list is the feed roster when the server sends one. A missing roster keeps the strip already installed.
   var seatEls = {};
   function seatColor(name) {
@@ -1872,10 +1872,15 @@ footer a { color: var(--foot); }
       var s = seatEls[a[0]], c = L.COLOR[a[0]], v = L.seatView(seatState(a[0], hot)), on = v.lit;
       chipView[a[0]] = v;
       s.el.classList.toggle('live', on);
-      s.el.classList.toggle('seen', !!v.seen);
+      s.el.classList.toggle('seen', !!v.seen && !on);
       s.el.classList.toggle('idle', !on && !v.seen);
       s.dot.style.background = on ? rgb(c) : v.seen ? rgb(c, 0.55) : cssVar('--dot-off');
       s.dot.style.boxShadow = on ? '0 0 0 2px ' + cssVar('--ring-gap') + ', 0 0 0 4px ' + rgb(c) : 'none';
+      var nm = s.el.querySelector('.nm');
+      if (nm && !s.el.classList.contains('dormant')) {
+        var label = String(L.LABEL[a[0]] || a[0]);
+        nm.title = on ? label + ' · working' : v.seen ? label + ' · seen' : label;
+      }
       var sil = !v.blink && fleetSilent(a[0]);
       s.el.classList.toggle('silent', sil); if (sil) s.dot.style.background = cssVar('--silent-ink');
       // .live (on) rolls the roster name. The canvas working label is gone. The dot stays a still color.
@@ -1909,13 +1914,16 @@ footer a { color: var(--foot); }
     $('blackout').parentNode.hidden = !clk;
     $('play').innerHTML = L.isPlaying(state.live, playing) ? '&#10074;&#10074; Pause' : '&#9654; Play';
     var seatNames = L.SEAT_NAMES;   // the strip's seats: header count and chips read the same seatState
-    var bots = seatNames.filter(function (k) { return seatState(k, hot) !== 'idle'; }).length;
+    var seenN = seatNames.filter(function (k) {
+      var st = seatState(k, hot);
+      return st === 'active' || st === 'live';
+    }).length;
     var workingN = seatNames.filter(function (k) { return fleetWorking(k); }).length;
-    window.LIVE_HEADER_ACTIVE = [bots, seatNames.length];
+    window.LIVE_HEADER_ACTIVE = [seenN, seatNames.length];
     window.LIVE_HEADER_WORKING = [workingN, seatNames.length];
     var total = window.LIVE_FEED_TOTAL != null ? window.LIVE_FEED_TOTAL : state.events.length;
     var st = state.generatedAt ? 'Refreshed <b title="' + L.fmtCt(state.generatedAt) + '">' + L.ago(now - state.generatedAt) + '</b>' : 'Waiting for feed';
-    st += ' · ' + Number(total).toLocaleString('en-US') + ' events · ' + bots + ' of ' + seatNames.length + ' seats active · ' + workingN + ' working';
+    st += ' · ' + Number(total).toLocaleString('en-US') + ' events · ' + seenN + ' seen · ' + workingN + ' working';
     paintFresh(now);
     if (fetchError) st += ' · <span class="err">' + fetchError + '</span>';
     $('status').innerHTML = st;
