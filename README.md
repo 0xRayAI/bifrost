@@ -26,6 +26,12 @@ That runs the Dockerfile copy check, the collector guard, and the `/healthz` che
 
 Forge connects the burst-live service to this repo after critic PASS on the SHA. Do not run `railway up` from a laptop. `deploy.sh` refuses.
 
+## Working lights
+
+A push, merge, or review lights that seat on the mesh for `LIVE_TURN_OPEN_MIN` minutes (default 20). The actor has to be in `collector/fleet-nodes.json` or the login on `collector/routing/inbox-roles.json`. `arch10x[bot]` is Arch1.
+
+An outside seat whose GitHub login is not in that map does not light from a merge. That seat posts `live-inbox <seat> --turn start` when the burst starts and `--turn end` when it stops.
+
 ## Station nudge
 
 The live scheduler is the board process, not launchd. Each minute the server checks the clock. Inside the window it posts one inbox line, `nudge:station:<seat>:<Chicago hour>`, for forge, critic, and blinky, and for arch1 when that id is in the fleet. The sentence is `Run station and re-read OP-PROC`. The window is weekdays, America/Chicago, from 7:30 through 17:30. 18:00 stays quiet. A second pass in the same Chicago hour does not post again. An inbox that already has work still gets the line; the queue keeps it behind the head.
