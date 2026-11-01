@@ -1,4 +1,5 @@
-// Weekday station reminder for the board process. The plist template is not loaded.
+// Weekday station reminder. server.mjs posts it on the half hour.
+// The launchd plist is a template and is not the scheduler.
 import { chicagoStamp } from './chicago-stamp.mjs';
 
 export const STATION_SENTENCE = 'Run station and re-read OP-PROC';
