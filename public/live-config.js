@@ -351,8 +351,7 @@
     if (!seats || typeof seats !== 'object') return rows || [];
     var keys = {};
     Object.keys(seats).forEach(function (k) { keys[String(k).toLowerCase()] = 1; });
-    // An empty seat map is not a fleet yet. The configured roster stays.
-    if (!Object.keys(keys).length) return rows || [];
+    // product_nodes are the only names kept without a fleet.seats row.
     var products = {};
     var nodes = feed.product_nodes;
     if (Array.isArray(nodes)) nodes.forEach(function (n) { if (typeof n === 'string' && n) products[n.toLowerCase()] = 1; });

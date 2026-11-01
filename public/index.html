@@ -1870,16 +1870,21 @@ footer a { color: var(--foot); }
     $('headTime').textContent = cur ? L.fmtCt(cur._t) + (state.live ? '' : replay ? ' · replay' : ' · rewound') : '\u00a0';
     L.AGENTS.forEach(function (a) {
       var s = seatEls[a[0]], c = L.COLOR[a[0]], v = L.seatView(seatState(a[0], hot)), on = v.lit;
+      if (!s) return;
       chipView[a[0]] = v;
+      var fleetRow = rosterSeatRow(window.LIVE_FLEET ? { fleet: window.LIVE_FLEET } : null, a[0]);
+      var dormant = !!(fleetRow && L.seatDormant && L.seatDormant(fleetRow.last_ct, Date.now()));
+      s.el.classList.toggle('dormant', dormant);
+      if (dormant) on = false;
       s.el.classList.toggle('live', on);
-      s.el.classList.toggle('seen', !!v.seen && !on);
-      s.el.classList.toggle('idle', !on && !v.seen);
-      s.dot.style.background = on ? rgb(c) : v.seen ? rgb(c, 0.55) : cssVar('--dot-off');
+      s.el.classList.toggle('seen', !!v.seen && !on && !dormant);
+      s.el.classList.toggle('idle', dormant || (!on && !v.seen));
+      s.dot.style.background = on ? rgb(c) : (!dormant && v.seen) ? rgb(c, 0.55) : cssVar('--dot-off');
       s.dot.style.boxShadow = on ? '0 0 0 2px ' + cssVar('--ring-gap') + ', 0 0 0 4px ' + rgb(c) : 'none';
       var nm = s.el.querySelector('.nm');
-      if (nm && !s.el.classList.contains('dormant')) {
+      if (nm) {
         var label = String(L.LABEL[a[0]] || a[0]);
-        nm.title = on ? label + ' · working' : v.seen ? label + ' · seen' : label;
+        nm.title = dormant ? label + ' · dormant' : on ? label + ' · working' : v.seen ? label + ' · seen' : label;
       }
       var sil = !v.blink && fleetSilent(a[0]);
       s.el.classList.toggle('silent', sil); if (sil) s.dot.style.background = cssVar('--silent-ink');
