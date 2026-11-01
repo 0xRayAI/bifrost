@@ -35,7 +35,7 @@ import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
-import { queueView, backlogOf, nudgeTargets, markShed } from './inbox-queue.mjs';
+import { liveLine, backlogOf, nudgeTargets, markShed } from './inbox-queue.mjs';
 const CI_NODES = loadCiNodes();
 const batch = createBatch();
 
@@ -854,7 +854,7 @@ function queueOpts(seat) {
 }
 function arch1InboxDepth() {
   const rows = Array.isArray(seatInbox.arch1) ? seatOpenRows('arch1', false) : [];
-  const head = queueView(rows, queueOpts('arch1'));
+  const head = liveLine(rows, queueOpts('arch1'));
   return { open: rows.length, head: head.length, backlog: Math.max(0, rows.length - head.length) };
 }
 function lineDone(seat, l) {
@@ -3787,7 +3787,7 @@ async function handle(req, res) {
     const base = since && seatInbox[who].some(l => l.id === since) ? linesAfter(seatInbox[who], since) : seatInbox[who];
     const rows = seatOpenRows(who, stale ? false : all);
     const opts = queueOpts(who);
-    const head = queueView(rows, opts);
+    const head = liveLine(rows, opts);
     const view = (all || stale) ? rows : (backlog ? backlogOf(rows, opts) : (queue ? head : rows));
     const keep = new Set(view.map(l => l.id)); touchSeat(who);
     const lines = base.filter(l => keep.has(l.id) && (!stale || settledLine(l)));

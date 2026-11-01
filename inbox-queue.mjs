@@ -112,6 +112,11 @@ export function queueView(lines, opts = {}) {
   return [];
 }
 
+export function liveLine(lines, opts = {}) {
+  const head = queueView(lines, opts);
+  return head.length ? [head[0]] : [];
+}
+
 export function backlogOf(lines, opts = {}) {
   const head = new Set(queueView(lines, opts).map((line) => line && line.id));
   return (Array.isArray(lines) ? lines : []).filter((line) => line && !head.has(line.id));

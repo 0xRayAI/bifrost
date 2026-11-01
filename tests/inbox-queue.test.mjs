@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { backlogOf, keepStation, lineRank, markShed, nudgeTargets, overWip, queueView, rSeat } from '../inbox-queue.mjs';
+import { backlogOf, keepStation, lineRank, liveLine, markShed, nudgeTargets, overWip, queueView, rSeat } from '../inbox-queue.mjs';
 
 const line = (id, extra) => ({ id, t_ct: extra.t || '2026-10-30T10:00:00Z', type: 'issue_comment', repo: '0xRayAI/xray', number: 1, title: id, url: '', reason: 'ask', ...extra });
 
@@ -138,4 +138,11 @@ test('over WIP a new non-P0 comment is stored off the head and is not laddered',
   assert.equal(queueView(lines).some((row) => row.id === 'new'), false);
   assert.deepEqual(nudgeTargets(lines).map((row) => row.id), ['h']);
   assert.deepEqual(nudgeTargets([fresh]).map((row) => row.id), ['new']);
+});
+
+test('the live line is the first line of the queue', () => {
+  const older = line('a', { title: 'P0: first', t: '2026-10-30T01:00:00Z' });
+  const newer = line('b', { title: 'P1: second', t: '2026-10-30T02:00:00Z' });
+  assert.deepEqual(queueView([newer, older]).map((row) => row.id), ['a', 'b']);
+  assert.deepEqual(liveLine([newer, older]).map((row) => row.id), ['a']);
 });
