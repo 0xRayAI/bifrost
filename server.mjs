@@ -796,7 +796,9 @@ function scheduledCards(now = Date.now()) {
 // Inbox ack: each seat's acked line ids (persisted). GET /inbox/<seat> hides acked lines. A closed or merged card
 // does not hide an unacked line. For reviewer, a Reviewer verdict at the card's current head newer than the line does.
 const inboxAcks = (() => { try { const o = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'acks.json'), 'utf8')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } })();
+const inboxPasses = (() => { try { const o = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'passes.json'), 'utf8')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } })();
 const ackedSet = s => new Set(inboxAcks[s] || []);
+const passedSet = s => new Set(inboxPasses[s] || []);
 function ackLines(seat, what, review) {
   const arr = seatInbox[seat] || [], have = new Set(inboxAcks[seat] || []); let n = 0;
   const at = typeof what === 'object' && what ? arr.findIndex(l => l.id === what.upto) : -1;
@@ -821,6 +823,19 @@ function ackLines(seat, what, review) {
   bfWrite('acks.json', JSON.stringify(inboxAcks));
   if (single && blocked && n === 0) return -2;
   return n;
+}
+function passLines(seat, id) {
+  const arr = seatInbox[seat] || [];
+  if (!arr.some(l => l.id === id)) return -1;
+  const have = new Set(inboxPasses[seat] || []);
+  if (!have.has(id) && !(ackedSet(seat).has(id))) {
+    have.add(id);
+    appendArchive('passes', { seat, line: id, t_ct: ctStamp(Date.now()), passed: true });
+  }
+  const live = new Set(arr.map(l => l.id));
+  inboxPasses[seat] = [...have].filter(x => live.has(x)).slice(-6000);
+  bfWrite('passes.json', JSON.stringify(inboxPasses));
+  return 1;
 }
 // Closed items (nudge skips them): the latest close / merge vs reopen event per repo#number, from the merged feed. A line
 // or card on a closed or merged PR / issue is done even when the board no longer carries its card.
@@ -877,7 +892,8 @@ function settledLine(l) {
 }
 function seatOpenRows(seat, all) {
   const acked = ackedSet(seat);
-  return all ? seatInbox[seat].slice() : seatInbox[seat].filter(l => !acked.has(l.id) && !lineDone(seat, l));
+  const passed = passedSet(seat);
+  return all ? seatInbox[seat].slice() : seatInbox[seat].filter(l => !acked.has(l.id) && !passed.has(l.id) && !lineDone(seat, l));
 }
 function openLines(seat, all) {
   const name = String(seat || '').toLowerCase();
@@ -3821,6 +3837,20 @@ async function handle(req, res) {
     if (n) serverActivity(who, 'turn', 'end', 'ack');
     if (n > 0) publishHeader();   // work tracking moves the packet to acked
     return json(req, res, 200, { ok: true, acked: n, open: seatOpenRows(who, false).length });
+  }
+  const passM = /^\/inbox\/([a-z0-9-]{2,16})\/pass$/.exec(p);
+  if (passM) {   // POST /inbox/<seat>/pass {"id"}: hide that line. The card stays open. Not an ack.
+    if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
+    let who; try { who = await seatOf(req); } catch { return json(req, res, 503, { error: 'could not verify token, retry' }, { 'Retry-After': '30' }); }
+    if (!who) { req.resume(); return json(req, res, 401, { error: 'unauthorized' }); }
+    if (!SEAT_IDS.includes(passM[1]) || who !== passM[1]) { req.resume(); return json(req, res, 403, { error: 'not your inbox' }); }
+    let d; try { d = JSON.parse((await readBody(req, 4096)).toString('utf8')); } catch { return json(req, res, 400, { error: 'invalid json' }); }
+    const id = d && typeof d.id === 'string' && d.id.length <= 300 ? d.id : '';
+    if (!id) return json(req, res, 400, { error: 'id required' });
+    const n = passLines(who, id); touchSeat(who);
+    if (n < 0) return json(req, res, 404, { error: 'no such line' });
+    if (n > 0) publishHeader();
+    return json(req, res, 200, { ok: true, passed: n, open: seatOpenRows(who, false).length });
   }
   if (p === '/routing') {   // GET /routing: the routing map, read-only (seat, login, aliases, status). No keys, no webhook URLs.
     if (m !== 'GET') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET' });
