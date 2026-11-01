@@ -848,6 +848,25 @@ export function openCloudTurns(lines, now = Date.now()) {
     .sort((a, b) => a.bcId.localeCompare(b.bcId));
 }
 
+/** CloudAgents stays on the mesh. A non-empty open_agents list lights it. An empty list keeps last_ct. */
+export function stampCloudMesh(header) {
+  const h = header && typeof header === 'object' && !Array.isArray(header) ? header : {};
+  const nodes = (Array.isArray(h.product_nodes) ? h.product_nodes : []).filter(n => n && n !== 'burst-live');
+  if (!nodes.includes('CloudAgents')) nodes.push('CloudAgents');
+  const had = h.fleet && typeof h.fleet === 'object' && !Array.isArray(h.fleet) ? h.fleet : null;
+  const fleet = had ? { ...had } : {};
+  const prev = fleet.cloud && typeof fleet.cloud === 'object' && !Array.isArray(fleet.cloud) ? fleet.cloud : {};
+  const open = (Array.isArray(prev.open_agents) ? prev.open_agents : []).map(id => String(id)).filter(Boolean);
+  const last = prev.last_ct || prev.github_last_ct || null;
+  const cloud = { ...prev, open_agents: open, active: open.length > 0, working: open.length > 0, last_ct: last };
+  const working = { ...(fleet.working || {}) };
+  if (open.length) working.CloudAgents = { ...(working.CloudAgents || {}), via: (working.CloudAgents && working.CloudAgents.via) || 'cloud' };
+  else delete working.CloudAgents;
+  const next = { ...fleet, cloud };
+  if (had || open.length) next.working = working;
+  return { ...h, product_nodes: nodes, fleet: next };
+}
+
 /** A running cloud row is working on its own id. It does not mark the launching seat.
  * `reviewer` canonicalizes to critic, so a row seat of reviewer must not light critic either.
  * A finished or failed row leaves open_agents. A cloud via mark on a seat is dropped. */

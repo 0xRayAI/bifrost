@@ -916,7 +916,10 @@ footer a { color: var(--foot); }
   // Fleet state from the feed: seat active = owned file changed or GitHub activity in the last 15 min
   function fleetActive(k) {
     var f = window.LIVE_FLEET, name = k === 'blinky' && !(f && f.seats && f.seats.blinky) ? 'Coord' : k;
-    if (k === 'CloudAgents') return !!(f && f.cloud && f.cloud.active);   // open agent or cursoragent on GitHub
+    if (k === 'CloudAgents') {
+      var node = L.cloudNode(f);
+      return !!(node.lit || node.last_ct);
+    }
     var s = f && f.seats && (f.seats[name] || f.seats[String(name).toLowerCase()]);
     return !!(s && s.active);
   }
@@ -926,17 +929,8 @@ footer a { color: var(--foot); }
   // the one seat state for chip + node; views recorded for tests/debug (window.LIVE_SEAT_VIEWS)
   var chipView = {}, nodeView = {}; window.LIVE_SEAT_VIEWS = { chip: chipView, node: nodeView };
   function seatState(k, hot) { return L.seatState(fleetWorking(k), !!(hot && hot[k]), fleetActive(k)); }
-  function fleetWorking(k) {   // in-flight spinner; not counted in N of M
-    var f = window.LIVE_FLEET;
-    if (k === 'CloudAgents') return !!(f && f.cloud && f.cloud.working);
-    if (!f) return false;
-    var names = fleetNames(k);
-    for (var i = 0; i < names.length; i++) {
-      var name = names[i];
-      if (f.working && f.working[name]) return true;
-      if (f.seats && f.seats[name] && f.seats[name].working) return true;
-    }
-    return false;
+  function fleetWorking(k) {   // same bit as the roster chip; CloudAgents follows open_agents
+    return L.meshWorking(window.LIVE_FLEET, k);
   }
   // Live queue: new ids wait here until the view is live, then flash in time order (late ones tagged)
   var LATE_MS = 2 * 60 * 1000, CATCHUP_MS = 30 * 60 * 1000, BATCH_MS = 9000;
@@ -1401,6 +1395,7 @@ footer a { color: var(--foot); }
     Object.keys(L.SATS).forEach(function (key, i) {
       var pul = 0;
       pings.forEach(function (pk) { if (pk.src === key) pul = Math.max(pul, L.pulse(pk.p * L.PULSE_MS, reduced)); });
+      if (fleetWorking(key)) pul = Math.max(pul, L.pulse(nowWall % L.PULSE_MS, reduced));
       ctx.globalAlpha = L.entry(since, i, reduced);
       var nv = L.seatView(seatState(key, hot)); nodeView[key] = nv;   // same state as the header chip
       drawNode(key, nv.lit, fs, pul, nv.nodeWorking, nowWall, !!nv.seen);

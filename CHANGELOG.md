@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The mesh keeps a CloudAgents node. A non-empty `open_agents` lights it. An empty list leaves the node with `last_ct`. Seat working on the canvas uses the same bit as the roster chip.
 - The board tick is the station-nudge scheduler. Weekday half hours 7:30–17:30 CT post `nudge:station:<seat>:<hour>` for forge, critic, and blinky, and for arch1 when that seat is in the fleet, even when the inbox already has work. The queue still holds that line behind the head. The launchd plist is not loaded.
 - An outside seat's stall card follows that seat's comment, push, or close on the card. A prompt with no working_on still does not spin every card that seat owns.
 - Sync the live app to xray `house/live/app` at `f2008613`. A critic ready or green head rings the owner's chat after the inbox wake. The image COPY list includes `chat-doorbell.mjs`. Chat keys stay in env.

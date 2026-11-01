@@ -158,10 +158,9 @@ def visible_feed_lists(services, product_nodes):
 
 
 def stamp_cloud_node(product_nodes, fleet_state):
-    """CloudAgents is a product node when the fleet has a cloud object. An empty open set stays off."""
+    """CloudAgents stays on the mesh. An empty open set on fleet_state does not remove it."""
     nodes = [n for n in (product_nodes or []) if n != "burst-live"]
-    cloud = fleet_state.get("cloud") if isinstance(fleet_state, dict) else None
-    if isinstance(cloud, dict) and "CloudAgents" not in nodes:
+    if "CloudAgents" not in nodes:
         nodes.append("CloudAgents")
     return nodes
 
