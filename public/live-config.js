@@ -235,11 +235,43 @@
     }
     return L.workOnKey(mark);
   };
-  L.cardInWork = function (c, fleet) {
+  // True when some seat's working_on names this card. The card's next owner
+  // can be a different seat. A prompt pulse with no working_on names nothing.
+  L.cardNamedByWork = function (fleet, want) {
+    if (!want || !fleet) return false;
+    var seen = {};
+    var bags = [fleet.working, fleet.seats];
+    for (var b = 0; b < bags.length; b++) {
+      var obj = bags[b];
+      if (!obj) continue;
+      for (var name in obj) {
+        if (!Object.prototype.hasOwnProperty.call(obj, name) || seen[name]) continue;
+        seen[name] = 1;
+        if (L.seatWorkOn(fleet, name) === want) return true;
+      }
+    }
+    return false;
+  };
+  // A running cloud row bound to this card. Finished and stale rows do not spin it.
+  L.cardCloudBound = function (c, clouds) {
     var want = L.cardWorkKey(c);
-    var seat = c && (c._seat || c.seat);
-    if (!want || !seat) return false;
-    return L.seatWorkOn(fleet, seat) === want;
+    var key = String(c && c.key || '').toLowerCase();
+    if (!want && !key) return false;
+    var list = clouds || [];
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (!a || a.state !== 'running') continue;
+      var card = String(a.card || '');
+      if (want && L.workOnKey(card) === want) return true;
+      if (key && card.toLowerCase() === key) return true;
+    }
+    return false;
+  };
+  L.cardInWork = function (c, fleet, clouds) {
+    if (L.cardCloudBound(c, clouds)) return true;
+    var want = L.cardWorkKey(c);
+    if (!want) return false;
+    return L.cardNamedByWork(fleet, want);
   };
   L.rosterKept = function (rows, feed) {
     var fleet = feed && feed.fleet;
