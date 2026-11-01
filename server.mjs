@@ -2165,8 +2165,8 @@ function cardMatchesWork(card, on) {
 }
 // A seat stays working only while an open board card is that work.
 // Before the first card loads, the in-flight mark stays so a cold boot is not a blank fleet.
-// A loaded board with no open card clears working.
-function bindSeatWorkToCards(fleet) {
+// A loaded board with no open card clears working. A GitHub write still inside the turn window stays.
+function bindSeatWorkToCards(fleet, now = Date.now()) {
   if (!fleet) return fleet;
   if (!bfCards.length) return fleet;
   const open = bfCards.filter(cardIsActiveWork);
@@ -2203,6 +2203,11 @@ function bindSeatWorkToCards(fleet) {
       }
     }
     if (keep) continue;
+    // A merge closes the card. The GitHub write still lights the seat until the turn window ends.
+    if (row && row.via === 'github') {
+      const at = Date.parse(row.since_ct || '');
+      if (Number.isFinite(at) && now - at <= TURN_OPEN_MS && at - now <= 300000) continue;
+    }
     if (working[name]) { delete working[name]; changed = true; }
     if (seat && (seat.working || seat.working_on || seat.working_via)) {
       const next = { ...seat, working: false };
