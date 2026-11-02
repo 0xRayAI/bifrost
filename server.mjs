@@ -1387,7 +1387,7 @@ async function githubIssueFace(card, token) {
   let res;
   try {
     res = await fetch(root + '/repos/' + repo + '/issues/' + number, {
-      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'bifrost' },
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'Bifrost' },
     });
   } catch { return null; }
   if (!res.ok) return null;
