@@ -178,6 +178,20 @@ test('a newer merge tip on the same pull is the head', () => {
   assert.equal(liveLine([other, ready], { cardOf: (row) => both[row.number] })[0].id, 'h');
 });
 
+test('a newer ready on the same pull is the head when the card is not a pr', () => {
+  const cards = { 831: { kind: 'packet', title: 'lookup' } };
+  const cardOf = (row) => cards[row.number] || null;
+  const oldReady = line('old', { type: 'packet', kind: 'ready', number: 831, sha: '3e1050b0', t: '2026-11-02T13:52:00-06:00' });
+  const fresh = line('new', { type: 'packet', kind: 'ready', number: 831, sha: '2af5eebef', t: '2026-11-02T14:04:00-06:00' });
+  const pass = line('pass', { type: 'ci_pass', kind: 'ci_pass', number: 831, sha: '2af5eebef', title: 'ci_pass', t: '2026-11-02T14:04:34-06:00' });
+  const opts = { cardOf, seat: 'critic' };
+  assert.equal(liveLine([oldReady, pass, fresh], opts)[0].id, 'new');
+  assert.equal(queueView([oldReady, pass, fresh], opts).some((row) => row.id === 'old'), false);
+  const oldPass = line('old-pass', { type: 'ci_pass', kind: 'ci_pass', number: 831, sha: '3e1050b0', title: 'ci_pass', t: '2026-11-02T13:59:00-06:00' });
+  assert.equal(queueView([oldPass, pass], opts).some((row) => row.id === 'old-pass'), false);
+  assert.equal(liveLine([oldPass, pass], opts)[0].id, 'pass');
+});
+
 test('a shed line is never the head, and a ready handoff leads a same-card tip', () => {
   const cards = { 821: { kind: 'pr', title: 'beat', packet: { raci: 'R=Arch1', goal: 'P1 beat' } } };
   const cardOf = (row) => cards[row.number] || null;
