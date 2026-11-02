@@ -19,7 +19,7 @@ import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRost
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats } from './governor.mjs';
-import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn, isPlanCard, liveWorkCount, postedCards, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
+import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat } from './wake-gate.mjs';
@@ -1293,10 +1293,11 @@ function ensurePacketCard(line) {
   if (bfCards.some(c => c && String(c.key || '').toLowerCase() === key.toLowerCase())) return;
   const number = Number(line.number);
   const owner = typeof line.to === 'string' && line.to ? line.to : line.seat;
+  const face = packetCardFace(line);
   bfCards = bfCards.concat([{
     key, born: 'packet', kind: 'packet', repo: String(line.repo || ''),
     number: Number.isInteger(number) ? number : 0,
-    title: String(line.title || '').slice(0, 120), url: String(line.url || '').slice(0, 300),
+    title: face.title, url: face.url,
     owner: String(owner || '').slice(0, 24), stage: 'open', state: 'live',
     packet: {}, packet_ok: true, missing: [],
     beats: [], last_beat_t: Date.now(), stall: false,
@@ -1356,7 +1357,8 @@ function publishBoard(updatedCt, settled) {
   archiveFinals(settled, stamp);
   const merged = mergeCards(waveCards, sourceCardsFrom(itemsFromWork(), { seats: SEAT_IDS }));
   const scheduled = waveBoard(merged);
-  scheduled.cards = attachPacketCards(scheduled.cards, githubEvents()).map(applyBrief);
+  const events = githubEvents();
+  scheduled.cards = restoreHandoffFace(attachPacketCards(scheduled.cards, events), events).map(applyBrief);
   const sig = JSON.stringify(scheduled.cards);
   if (sig === boardSig) return;
   boardSig = sig;
