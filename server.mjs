@@ -734,7 +734,6 @@ function persistWakeOk() {
 Object.assign(wakeOkAt, readWakeOk(path.join(STATE_DIR, 'wake-ok.json')));
 const NUDGE_L1_MS = (Number(process.env.NUDGE_L1_S) || 3600) * 1000, NUDGE_L2_MS = (Number(process.env.NUDGE_L2_S) || 1800) * 1000;
 const NUDGE_L3_MS = (Number(process.env.NUDGE_L3_S) > 0 ? Number(process.env.NUDGE_L3_S) : 7200) * 1000;
-const HELD_MAX_MS = (Number(process.env.HELD_MAX_S) > 0 ? Number(process.env.HELD_MAX_S) : 72 * 3600) * 1000;
 const seatInbox = {};   // seat -> [lines]
 for (const s of SEAT_IDS) { try { seatInbox[s] = fs.readFileSync(path.join(STATE_DIR, 'inbox', s + '.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { seatInbox[s] = []; } }
 if (!seatInbox.builder.length && inboxLines.length) seatInbox.builder = inboxLines.slice();   // carry the builder mirror over
@@ -1437,13 +1436,6 @@ function setCards(wb) {
   waveCards = kept;
   publishBoard(stamp, wb.settled);
 }
-function holdOwner(c) {
-  const owner = seatIdOf(c.owner);
-  if (owner && SEAT_IDS.includes(owner)) return owner;
-  const by = seatIdOf(c.hold && c.hold.by);
-  if (by && SEAT_IDS.includes(by)) return by;
-  return cosSeat();
-}
 // A future start_after parks the card (no nudge, and it is not an open card for the tripwire). At that time one
 // inbox line wakes the owning seat. The command override wins over the collector field. Both the date and the
 // woke mark live in start-after.json, so a restart does not lose the date or send the wake twice.
@@ -1495,8 +1487,7 @@ function applyStartAfter(now = Date.now()) {
 }
 // NUDGE: a live card with no beat for 60 min -> level 1 to the packet's next owner (else the card owner); still no
 // The card nudge is an inbox line for that seat, so the webhook fires. It does not open an L2 record and it does not wake the CoS seat to reassign. Level 3 then repeats to that same owner every 2h.
-// Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no L1/L2/L3. It nudges
-// the owner once if it stays held with no beat past HELD_MAX_S (default 72h), unless the repo is in that list.
+// Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no nudge.
 function evalNudges(now = Date.now()) {
   let changed = applyStartAfter(now); const byKey = new Map(bfCards.map(c => [c.key, c]));
   for (const n of nudges) {
@@ -1514,16 +1505,7 @@ function evalNudges(now = Date.now()) {
   for (const c of bfCards) {
     if (isPlanCard(c)) continue;   // the plan card is the tripwire's, and its beat is refreshed by the scheduler
     if (cardNoNudge(c) || itemClosed(c.repo, c.number)) continue;   // closed / merged PRs and issues are never nudged
-    if (c.state === 'held' && !c.pinned && c.last_beat_t && now - c.last_beat_t >= HELD_MAX_MS) {
-      const nid = `nudge:${c.key}:held:${c.last_beat_t}`;
-      if (!nudges.some(n => n.id === nid)) {
-        const seat = holdOwner(c);
-        nudges.push({ id: nid, kind: 'held', t: now, t_ct: ctStamp(now), card: c.key, repo: c.repo || '', number: c.number || 0,
-          title: String(c.title || '').slice(0, 120), url: String(c.url || '').slice(0, 300), stage: c.stage || '', level: 0, seat, via: 'held past max', beat_t: c.last_beat_t });
-        changed = true;
-        deliverNudge(nudges[nudges.length - 1]);
-      }
-    }
+    if (c.state === 'held') continue;   // a held card stays on the board and raises no nudge
     if (batch.inBeat(startKeyOf(c))) {
       for (const n of nudges) {
         if (n.closed_at || n.card !== c.key) continue;
