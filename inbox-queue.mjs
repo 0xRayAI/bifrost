@@ -139,6 +139,36 @@ function pick(rows, rank) {
   }).map((row) => row.line);
 }
 
+const SAME_HEAD = new Set(['ready', 'merge', 'critic_fail', 'ci_fail', 'live_pass', 'ci_pass']);
+
+function handoffKind(line) {
+  const kind = String(line && line.kind || '').toLowerCase();
+  if (SAME_HEAD.has(kind)) return kind;
+  const type = String(line && line.type || '').toLowerCase();
+  return SAME_HEAD.has(type) ? type : '';
+}
+
+/** An older handoff of the same kind on the same pull is shed. A newer sha can be the head. */
+function shedOlderHeads(rows) {
+  const best = new Map();
+  for (const row of rows) {
+    const kind = handoffKind(row.line);
+    const key = cardKey(row.line);
+    if (!kind || !key) continue;
+    const id = `${key}\0${kind}`;
+    const prev = best.get(id);
+    if (!prev || byAge(prev, row) < 0) best.set(id, row);
+  }
+  if (best.size === 0) return rows;
+  const keep = new Set([...best.values()].map((row) => row.line.id));
+  return rows.map((row) => {
+    const kind = handoffKind(row.line);
+    const key = cardKey(row.line);
+    if (!kind || !key || keep.has(row.line.id)) return row;
+    return { ...row, line: { ...row.line, shed: true } };
+  });
+}
+
 function preferNewestTip(rows) {
   const best = new Map();
   for (const row of rows) {
@@ -161,7 +191,7 @@ function preferNewestTip(rows) {
 export function queueView(lines, opts = {}) {
   const wip = Number.isInteger(opts.wip) ? opts.wip : WAKE_WIP;
   const seat = String(opts.seat || '');
-  const rows = preferNewestTip(ranked(lines, opts)).filter((row) => !row.line || row.line.shed !== true);
+  const rows = shedOlderHeads(preferNewestTip(ranked(lines, opts))).filter((row) => !row.line || row.line.shed !== true);
   const ready = pick(rows, 0);
   const priority = rows.filter((row) => row.rank === 1 && row.priority).sort(seat ? byMotion : byAge).map((row) => row.line);
   const rest = rows.filter((row) => row.rank === 1 && !row.priority && !row.line.shed).sort(newestFirst).slice(0, opts.nudge ? 0 : wip).map((row) => row.line);
