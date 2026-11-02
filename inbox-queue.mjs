@@ -129,13 +129,39 @@ function newestFirst(a, b) {
 }
 
 function pick(rows, rank) {
-  return rows.filter((row) => row.rank === rank).sort(byAge).map((row) => row.line);
+  const list = rows.filter((row) => row.rank === rank);
+  if (rank !== 0) return list.sort(byAge).map((row) => row.line);
+  return list.sort((a, b) => {
+    const ar = String(a.line.kind || '').toLowerCase() === 'ready' ? 0 : 1;
+    const br = String(b.line.kind || '').toLowerCase() === 'ready' ? 0 : 1;
+    if (ar !== br) return ar - br;
+    return byAge(a, b);
+  }).map((row) => row.line);
+}
+
+function preferNewestTip(rows) {
+  const best = new Map();
+  for (const row of rows) {
+    if (row.rank !== 0) continue;
+    const key = cardKey(row.line);
+    if (!key) continue;
+    const prev = best.get(key);
+    if (!prev || byAge(prev, row) < 0) best.set(key, row);
+  }
+  if (best.size === 0) return rows;
+  const keep = new Set([...best.values()].map((row) => row.line.id));
+  return rows.map((row) => {
+    if (row.rank !== 0) return row;
+    const key = cardKey(row.line);
+    if (!key || keep.has(row.line.id)) return row;
+    return { ...row, rank: 2 };
+  });
 }
 
 export function queueView(lines, opts = {}) {
   const wip = Number.isInteger(opts.wip) ? opts.wip : WAKE_WIP;
   const seat = String(opts.seat || '');
-  const rows = ranked(lines, opts);
+  const rows = preferNewestTip(ranked(lines, opts));
   const ready = pick(rows, 0);
   const priority = rows.filter((row) => row.rank === 1 && row.priority).sort(seat ? byMotion : byAge).map((row) => row.line);
   const rest = rows.filter((row) => row.rank === 1 && !row.priority && !row.line.shed).sort(newestFirst).slice(0, opts.nudge ? 0 : wip).map((row) => row.line);

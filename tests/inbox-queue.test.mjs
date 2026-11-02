@@ -166,6 +166,18 @@ test('a ready handoff on an issue does not pin the live line', () => {
   assert.deepEqual(liveLine([zombie, merge], { cardOf }).map((row) => row.id), ['m']);
 });
 
+test('a newer merge tip on the same pull is the head', () => {
+  const cards = { 811: { kind: 'pr', title: 'queue' }, 10: { kind: 'pr', title: 'ready' } };
+  const cardOf = (row) => cards[row.number] || null;
+  const oldTip = line('old', { type: 'packet', kind: 'merge', number: 811, t: '2026-11-02T12:31:00Z' });
+  const newTip = line('new', { type: 'packet', kind: 'merge', number: 811, t: '2026-11-02T13:40:00Z' });
+  assert.equal(liveLine([oldTip, newTip], { cardOf })[0].id, 'new');
+  const ready = line('h', { type: 'packet', kind: 'ready', number: 10, t: '2026-11-02T10:00:00Z' });
+  const other = line('m', { type: 'packet', kind: 'merge', number: 11, t: '2026-11-02T13:00:00Z' });
+  const both = { ...cards, 11: { kind: 'pr', title: 'other' } };
+  assert.equal(liveLine([other, ready], { cardOf: (row) => both[row.number] })[0].id, 'h');
+});
+
 test('the live line is the first line of the queue', () => {
   const older = line('a', { title: 'P0: first', t: '2026-10-30T01:00:00Z' });
   const newer = line('b', { title: 'P1: second', t: '2026-10-30T02:00:00Z' });
