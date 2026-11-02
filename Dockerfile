@@ -8,7 +8,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 tzdata ca-certificates gosu \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package.json server.mjs health-exit.mjs feed-read-worker.mjs presence.mjs source.mjs archive.mjs ci-credit.mjs resp.mjs history-store.mjs compact-cards.mjs origin.mjs routes.mjs governor.mjs arch1-launch.mjs worktrack.mjs handoff.mjs wave-schedule.mjs bifrost-waves.json chicago-stamp.mjs pr-batch.mjs ci-clear.mjs wake-gate.mjs station-tick.mjs inbox-queue.mjs chat-doorbell.mjs ./
+COPY package.json server.mjs health-exit.mjs feed-read-worker.mjs presence.mjs source.mjs archive.mjs ci-credit.mjs resp.mjs history-store.mjs compact-cards.mjs origin.mjs routes.mjs governor.mjs arch1-launch.mjs worktrack.mjs handoff.mjs wave-schedule.mjs fleet-mode.mjs bifrost-waves.json chicago-stamp.mjs pr-batch.mjs ci-clear.mjs wake-gate.mjs station-tick.mjs inbox-queue.mjs chat-doorbell.mjs ./
 COPY public ./public
 COPY collector ./collector
 # One line, the house config name:. Committed so the image COPY succeeds.

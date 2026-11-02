@@ -40,6 +40,7 @@ function start(data, extra = {}) {
       NUDGE_L1_S: '1',
       NUDGE_L2_S: '1',
       NUDGE_L3_S: '1',
+      FLEET_MODE: 'full',
       BIFROST_TICK_S: '3600',
       ...extra,
     },
