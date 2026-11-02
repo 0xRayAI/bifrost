@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A line marked shed is never the live head, including the rank-2 fallback. A ready handoff still leads a same-card tip. xray#823
 - An unassigned issue wakes arch1 when forge is dark, and forge otherwise. xray#815
 - A newer merge tip on the same pull is the live head. An older tip on that pull does not stay in front. A ready handoff still leads. xray#813 bifrost#39
 - A new issue open leads an older parent tip. A passed parent stays shed, so later tips on that card do not take the head. xray queue twin.

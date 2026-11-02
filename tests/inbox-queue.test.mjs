@@ -178,6 +178,16 @@ test('a newer merge tip on the same pull is the head', () => {
   assert.equal(liveLine([other, ready], { cardOf: (row) => both[row.number] })[0].id, 'h');
 });
 
+test('a shed line is never the head, and a ready handoff leads a same-card tip', () => {
+  const cards = { 821: { kind: 'pr', title: 'beat', packet: { raci: 'R=Arch1', goal: 'P1 beat' } } };
+  const cardOf = (row) => cards[row.number] || null;
+  const shed = line('soft', { number: 564, title: 'old soft tip', t: '2026-10-30T05:00:00Z', shed: true });
+  assert.deepEqual(liveLine([shed], { seat: 'arch1', cardOf }), []);
+  const tip = line('tip', { number: 821, title: 'parent tip', t: '2026-11-02T12:00:00Z' });
+  const ready = line('h', { type: 'packet', kind: 'ready', number: 821, title: 'handoff ready', t: '2026-11-02T16:00:00Z' });
+  assert.equal(liveLine([shed, tip, ready], { seat: 'arch1', cardOf })[0].id, 'h');
+});
+
 test('the live line is the first line of the queue', () => {
   const older = line('a', { title: 'P0: first', t: '2026-10-30T01:00:00Z' });
   const newer = line('b', { title: 'P1: second', t: '2026-10-30T02:00:00Z' });
