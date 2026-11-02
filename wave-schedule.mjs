@@ -609,6 +609,22 @@ export function restoreHandoffFace(cards, events) {
   });
 }
 
+/** Title and URL from a GitHub issue API body. A pull_request object means a pull. */
+export function faceFromGithubIssue(body, card) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const title = String(body.title || '').trim();
+  if (!title || handoffLabel(title)) return null;
+  const pull = !!(body.pull_request && typeof body.pull_request === 'object');
+  const repo = String((card && card.repo) || '');
+  const number = Number(card && card.number);
+  const fallback = repo && Number.isInteger(number) && number > 0
+    ? `https://github.com/${repo}/${pull ? 'pull' : 'issues'}/${number}`
+    : '';
+  const url = String(body.html_url || fallback);
+  if (!url) return null;
+  return { title: title.slice(0, 120), url: url.slice(0, 300), kind: pull ? 'pr' : 'issue' };
+}
+
 /** Rewrite a holding card onto the PR that pr_open and pr_commit share. */
 export function attachPacketCards(cards, events) {
   const list = (Array.isArray(cards) ? cards : []).filter((card) => card && typeof card === 'object').map((card) => ({ ...card }));
