@@ -70,6 +70,14 @@ function byLevel(a, b) {
   return byAge(a, b);
 }
 
+function zombieHandoff(line, card) {
+  const type = String(line && line.type || '').toLowerCase();
+  const kind = String(line && line.kind || '').toLowerCase();
+  if (type !== 'packet' || (kind !== 'ready' && kind !== 'merge')) return false;
+  if (!card || card.kind == null) return false;
+  return String(card.kind) !== 'pr';
+}
+
 function ranked(lines, opts) {
   const titleOf = typeof opts.titleOf === 'function' ? opts.titleOf : () => '';
   const cardOf = typeof opts.cardOf === 'function' ? opts.cardOf : () => null;
@@ -78,6 +86,7 @@ function ranked(lines, opts) {
     const card = cardOf(line);
     const cardTitle = (card && card.title) || titleOf(line) || '';
     let rank = lineRank(line, cardTitle);
+    if (zombieHandoff(line, card)) rank = 2;
     const priority = isPriority(line, cardTitle, card, seat);
     const named = rSeat((card && card.packet || {}).raci);
     if (seat && rank !== 0 && rank !== 3 && rank !== 4 && named !== seat.toLowerCase()) rank = 2;

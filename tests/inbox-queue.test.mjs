@@ -140,6 +140,14 @@ test('over WIP a new non-P0 comment is stored off the head and is not laddered',
   assert.deepEqual(nudgeTargets([fresh]).map((row) => row.id), ['new']);
 });
 
+test('a ready handoff on an issue does not pin the live line', () => {
+  const zombie = line('z', { type: 'packet', kind: 'ready', title: 'handoff ready', number: 389, t: '2026-10-01T00:00:00Z' });
+  const merge = line('m', { type: 'packet', kind: 'merge', title: 'handoff merge', number: 804, t: '2026-11-01T12:00:00Z' });
+  const cards = { 389: { kind: 'issue', title: 'ponder' }, 804: { kind: 'pr', title: 'note' } };
+  const cardOf = (row) => cards[row.number] || null;
+  assert.deepEqual(liveLine([zombie, merge], { cardOf }).map((row) => row.id), ['m']);
+});
+
 test('the live line is the first line of the queue', () => {
   const older = line('a', { title: 'P0: first', t: '2026-10-30T01:00:00Z' });
   const newer = line('b', { title: 'P1: second', t: '2026-10-30T02:00:00Z' });
