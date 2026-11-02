@@ -19,7 +19,7 @@ import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRost
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats } from './governor.mjs';
-import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
+import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat } from './wake-gate.mjs';
@@ -1370,6 +1370,49 @@ function publishBoard(updatedCt, settled) {
     archiveCard(c, stamp);
   }
   recomputeGithubDataAt();
+  scheduleFaceRepair();
+}
+const faceRepair = { busy: false, tried: new Map() };
+function scheduleFaceRepair() {
+  if (faceRepair.busy || !process.env.GITHUB_READ_TOKEN) return;
+  if (!bfCards.some(card => card && handoffLabel(card.title))) return;
+  faceRepair.busy = true;
+  setTimeout(() => { repairHandoffFaces().finally(() => { faceRepair.busy = false; }); }, 0).unref?.();
+}
+async function githubIssueFace(card, token) {
+  const repo = String(card && card.repo || '');
+  const number = Number(card && card.number);
+  if (!repo.includes('/') || !Number.isInteger(number) || number < 1) return null;
+  const root = String(GITHUB_API || '').replace(/\/$/, '');
+  let res;
+  try {
+    res = await fetch(root + '/repos/' + repo + '/issues/' + number, {
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'bifrost' },
+    });
+  } catch { return null; }
+  if (!res.ok) return null;
+  try { return faceFromGithubIssue(await res.json(), card); } catch { return null; }
+}
+async function repairHandoffFaces() {
+  const token = process.env.GITHUB_READ_TOKEN || '';
+  if (!token) return;
+  let changed = false;
+  for (const card of bfCards.slice()) {
+    if (!card || !handoffLabel(card.title)) continue;
+    const key = String(card.key || '');
+    const last = faceRepair.tried.get(key) || 0;
+    if (Date.now() - last < 60000) continue;
+    faceRepair.tried.set(key, Date.now());
+    const face = await githubIssueFace(card, token);
+    if (!face) continue;
+    const live = bfCards.find(row => row && row.key === card.key);
+    if (!live || !handoffLabel(live.title)) continue;
+    live.title = face.title;
+    live.url = face.url;
+    live.kind = face.kind;
+    changed = true;
+  }
+  if (changed) publishBoard();
 }
 function takeTransitions(rows) {
   if (!Array.isArray(rows)) return;

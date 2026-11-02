@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packetCardFace, restoreHandoffFace } from '../wave-schedule.mjs';
+import { faceFromGithubIssue, packetCardFace, restoreHandoffFace } from '../wave-schedule.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP = path.join(ROOT, 'server.mjs');
@@ -156,6 +157,67 @@ test('GET /cards keeps the GitHub title when a ready handoff arrives', async () 
     const done = new Promise(r => srv.child.exitCode != null || srv.child.signalCode ? r() : srv.child.once('exit', r));
     srv.child.kill();
     await done;
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test('GET /cards takes the GitHub issue title when the feed has no open event', async () => {
+  const title = 'Fleet news: remediate Cursor marketplace Anthropic.claude-code 2.1.313 (Oct 29)';
+  const parsed = faceFromGithubIssue({ title, html_url: 'https://github.com/0xRayAI/xray/issues/741' }, { repo: '0xRayAI/xray', number: 741 });
+  assert.equal(parsed.kind, 'issue');
+  assert.equal(faceFromGithubIssue({ title: 'held pull', html_url: 'https://github.com/0xRayAI/xray/pull/70', pull_request: { url: 'x' } }, { repo: '0xRayAI/xray', number: 70 }).kind, 'pr');
+  const mock = http.createServer((req, res) => {
+    if (req.url === '/repos/0xRayAI/xray/issues/741') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ title, html_url: 'https://github.com/0xRayAI/xray/issues/741' }));
+      return;
+    }
+    res.writeHead(404);
+    res.end('{}');
+  });
+  await new Promise(resolve => mock.listen(0, '127.0.0.1', resolve));
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-face-gh-'));
+  const forgeKey = 'forge-' + crypto.randomBytes(4).toString('hex');
+  const ingest = crypto.randomBytes(32).toString('hex');
+  fs.mkdirSync(path.join(data, 'live'), { recursive: true });
+  fs.writeFileSync(path.join(data, 'live', 'cards.json'), JSON.stringify({
+    updated_ct: '2026-11-02T00:00:00Z',
+    cards: [{ ...ghost(741), owner: 'forge' }],
+  }));
+  const srv = start(data, {
+    COLLECTOR: 'off',
+    GITHUB_READ_TOKEN: 'test-token',
+    GITHUB_API_URL: 'http://127.0.0.1:' + mock.address().port,
+    INGEST_SECRET: ingest,
+    SEAT_KEYS: JSON.stringify({ forge: crypto.createHash('sha256').update(forgeKey).digest('hex') }),
+  });
+  try {
+    await srv.ready;
+    const auth = { Authorization: 'Bearer ' + forgeKey };
+    const posted = await fetch(srv.base + '/inbox', {
+      method: 'POST', headers: { 'X-Live-Ingest': ingest, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines: [{
+        id: 'live-hold', t_ct: new Date().toISOString(), seat: 'forge', type: 'packet',
+        repo: 'acme/app', number: 3, title: 'card hold', url: 'https://github.com/acme/app/issues/3', reason: 'packet post',
+      }] }),
+    });
+    assert.equal(posted.status, 200, await posted.text());
+    let healed = null;
+    let body = null;
+    for (let i = 0; i < 30; i++) {
+      body = await (await fetch(srv.base + '/cards?seat=forge', { headers: auth })).json();
+      healed = (body.cards || []).find(card => card.key === '0xrayai/xray#741');
+      if (healed && healed.title === title) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(healed && healed.title, title, JSON.stringify(body && body.cards));
+    assert.equal(healed.url, 'https://github.com/0xRayAI/xray/issues/741');
+    assert.equal(healed.kind, 'issue');
+  } finally {
+    const done = new Promise(resolve => srv.child.exitCode != null || srv.child.signalCode ? resolve() : srv.child.once('exit', resolve));
+    srv.child.kill();
+    await done;
+    await new Promise(resolve => mock.close(resolve));
     fs.rmSync(data, { recursive: true, force: true });
   }
 });
