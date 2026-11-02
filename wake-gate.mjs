@@ -1,5 +1,5 @@
 // Wake gate. One seat is woken for real new work. The field for a P1 mark is `labels`.
-// Unassigned issue_open (and a P1 label on an issue) wakes forge. Blinky's routed copy is stored, not woken.
+// Unassigned issue_open (and a P1 label on an issue) wakes the default seat. That is forge, or arch1 when forge is dark. Blinky's routed copy is stored, not woken.
 // A pr_comment stored for blinky and the author wakes the author. Blinky is the extra copy.
 // A missing sha is never a repeat. The hour is a rolling 60 minutes. flag: hotfix skips the cap and the kind cooldown.
 
@@ -28,6 +28,13 @@ export function wakeConfig(env = {}) {
     turnOpenMs: (turnMin != null ? turnMin : 20) * 60000,
     statMs: (statH != null ? statH : 24) * 3600000,
   };
+}
+
+export function defaultIssueSeat(env = {}) {
+  const mode = String(env.LIVE_MODE || env.BIFROST_LIVE_MODE || '').trim().toLowerCase();
+  const dark = String(env.FORGE_DARK || '').trim().toLowerCase();
+  if (mode === 'arch1' || mode === 'arch1-only' || dark === '1' || dark === 'true' || dark === 'on') return 'arch1';
+  return 'forge';
 }
 
 export function createWakeState() {
@@ -101,7 +108,7 @@ function authorIndex(rows, idxs) {
   return null;
 }
 
-// Routed seat, then handoff `to`, then the card owner, then forge for an unassigned issue.
+// Routed seat, then handoff `to`, then the card owner, then the default seat for an unassigned issue.
 // Blinky keeps the inbox copy for an unassigned issue and for a comment the author also received.
 export function classifyBatch(lines, ctx = {}) {
   const ownerOf = typeof ctx.owner === 'function' ? ctx.owner : () => '';
@@ -139,7 +146,8 @@ export function classifyBatch(lines, ctx = {}) {
   for (const idxs of issues.values()) {
     const sample = rows[idxs[0]].line;
     const owner = String(ownerOf(sample) || '').trim().toLowerCase();
-    const target = owner || 'forge';
+    const fallback = String(ctx.defaultSeat || 'forge').trim().toLowerCase() || 'forge';
+    const target = owner || fallback;
     let woke = false;
     for (const i of idxs) {
       const row = rows[i];

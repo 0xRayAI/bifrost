@@ -22,7 +22,7 @@ import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallS
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, isPacketBorn, isPlanCard, liveWorkCount, postedCards, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine } from './wake-gate.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat } from './wake-gate.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -517,7 +517,7 @@ function wakeLineKept(line) {
 }
 function offerLines(lines) {
   const cfg = wakeConfig(process.env);
-  const { wakes, skips } = classifyBatch((Array.isArray(lines) ? lines : []).filter(wakeLineKept), { owner: ownerOfLine });
+  const { wakes, skips } = classifyBatch((Array.isArray(lines) ? lines : []).filter(wakeLineKept), { owner: ownerOfLine, defaultSeat: defaultIssueSeat(process.env) });
   for (const s of skips) recordSkip(s.seat, s.line, s.reason);
   const now = Date.now();
   for (const w of wakes) {
