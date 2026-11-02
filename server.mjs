@@ -32,6 +32,7 @@ import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
 import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
+import { normalizeFleetMode, wakeAllowed } from './fleet-mode.mjs';
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
@@ -727,6 +728,24 @@ const seatIdOf = name => { const t = String(name || '').toLowerCase().replace(/[
     if (SEAT_ALIAS[w]) return SEAT_ALIAS[w];
   } return null; };
 const STATE_DIR = path.join(process.env.MESH_DATA_DIR || '/data', 'live');
+let fleetMode = { mode: 'lights-on', by: 'default', at: '' };
+function loadFleetMode() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'fleet-mode.json'), 'utf8'));
+    const mode = normalizeFleetMode(raw && raw.mode);
+    if (mode) {
+      fleetMode = { mode, by: String(raw.by || 'manual').slice(0, 24), at: String(raw.at || '').slice(0, 40) };
+      return;
+    }
+  } catch { /* file missing: env, else lights-on */ }
+  const fromEnv = normalizeFleetMode(process.env.FLEET_MODE);
+  if (fromEnv) fleetMode = { mode: fromEnv, by: 'env', at: '' };
+}
+function saveFleetMode() {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(path.join(STATE_DIR, 'fleet-mode.json'), JSON.stringify(fleetMode));
+}
+loadFleetMode();
 function persistWakeOk() {
   try { writeWakeOk(path.join(STATE_DIR, 'wake-ok.json'), wakeOkAt); }
   catch (e) { console.log('wake: save failed ' + (e && e.code || 'write')); }
@@ -963,6 +982,7 @@ function nudgeLines(now) {
     const last = mine[mine.length - 1];
     if (mine.length >= 3 || (last && now - last.t < NUDGE_LINE_MS)) continue;
     const lvl = mine.length + 1;
+    if (!wakeAllowed(fleetMode.mode, lineCard(l) || l)) continue;
     nudges.push({ id: `${base}:L${lvl}`, kind: 'line', line_key: base, t: now, t_ct: ctStamp(now), card: '', repo: l.repo || '',
       number: Number.isInteger(l.number) ? l.number : 0, title: String(l.title || '').slice(0, 120), url: String(l.url || '').slice(0, 300),
       stage: '', level: lvl, seat, via: 'unacked line', line: String(l.id).slice(0, 300), since: new Date(t).toISOString() });
@@ -1221,6 +1241,7 @@ function nudgeToCloud(n) {   // a nudge to Builder is also an inbox line for Bui
 }
 function deliverNudge(n) {
   if (!n) return;
+  if (!wakeAllowed(fleetMode.mode, lineCard(n) || n)) return;
   const seats = [];
   const add = seat => {
     const id = canonSeat(seat);
@@ -1517,7 +1538,9 @@ function evalNudges(now = Date.now()) {
     }
     if (c.pinned || c.state !== 'live' || c.waiting || !c.last_beat_t || now - c.last_beat_t < NUDGE_L1_MS) continue;
     const id = lvl => `nudge:${c.key}:L${lvl}:${c.last_beat_t}`, has = lvl => nudges.find(n => n.id === id(lvl));
-    const mk = (lvl, seat, via, nid = id(lvl)) => { nudges.push({ id: nid, t: now, t_ct: ctStamp(now), card: c.key, repo: c.repo || '', number: c.number || 0,
+    const mk = (lvl, seat, via, nid = id(lvl)) => {
+      if (!wakeAllowed(fleetMode.mode, c)) return;
+      nudges.push({ id: nid, t: now, t_ct: ctStamp(now), card: c.key, repo: c.repo || '', number: c.number || 0,
       title: String(c.title || '').slice(0, 120), url: String(c.url || '').slice(0, 300), stage: c.stage || '', level: lvl, seat, via, beat_t: c.last_beat_t }); changed = true;
       deliverNudge(nudges[nudges.length - 1]); };
     const to = seatIdOf(c.nudge_to), nx = to || seatIdOf((c.packet || {})['next owner']);
@@ -1612,6 +1635,7 @@ function evalHandoffs(now) {
     if (lineHandled(ob.owes, { repo: ob.repo, number: ob.number, sha: ob.sha, kind: ob.kind })) continue;
     const held = bfCards.find(c => c && (c.key === ob.key || (String(c.repo || '').toLowerCase() === String(ob.repo || '').toLowerCase() && Number(c.number) === Number(ob.number))));
     if (held && startIsFuture(held, now)) continue;
+    if (!wakeAllowed(fleetMode.mode, held || { title: '', repo: ob.repo, number: ob.number })) continue;
     const base = `nudge:handoff:${ob.key}:${ob.kind}:${ob.sha}`;
     open.add(base);
     if (!nudges.some(n => n.id === base)) {
@@ -1753,6 +1777,7 @@ function mergedHeader(now = Date.now()) {
   h.wakes = wakeBoard(now);   // last successful wake per seat; quiet past BIFROST_WAKE_QUIET_MINUTES
   h.wake_stats = publicStats(wakeState, now, wakeConfig(process.env).statMs);
   h.routing = ROUTING;   // startup route check (bifrost-init rules)
+  h.fleet_mode = { mode: fleetMode.mode, by: fleetMode.by, at: fleetMode.at };
   h.clock = typeof clock === 'undefined' ? null : clock.run;   // timed run: deadlines per seat, cleared by a seat move
   h.kinds = [...new Set([...(g?.kinds || []), ...(b?.kinds || [])])].sort();
   h.notes = [...new Set([...(g?.notes || []), ...(b?.notes || [])])];
@@ -2729,7 +2754,7 @@ function healthBody() {   // public: counts, times, ages (s) and wake states; no
     cards_behind: behind, stale_status: staleStatus,
     last_tick: passAt ? new Date(passAt).toISOString() : null, stalled,
     history_ready: historyState.ready, history_redis: historyState.redis, history_cards: historyState.cards,
-    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), arch1_launch: arch1Launch.health(), arch1_inbox: arch1InboxDepth(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
+    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, by: fleetMode.by, at: fleetMode.at }, arch1_launch: arch1Launch.health(), arch1_inbox: arch1InboxDepth(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
   if (warming) body.status = 'warming';
   return body;
 }
@@ -3606,6 +3631,23 @@ async function handle(req, res) {
       } catch (e) { console.log('agent: append failed ' + ((e && e.code) || 'write')); }
     }
     return json(req, res, result.status, result.body);
+  }
+  if (p === '/fleet-mode' && m === 'GET') return json(req, res, 200, fleetMode);
+  if (p === '/fleet-mode' && m === 'POST') {
+    const hs = req.headers['x-live-ingest'];
+    let who = '';
+    if (typeof hs === 'string' && hs && safeEq(hs, INGEST_SECRET)) who = 'blaze';
+    else {
+      try { who = await seatOf(req) || ''; } catch { return json(req, res, 503, { error: 'could not verify token, retry' }, { 'Retry-After': '30' }); }
+      if (who !== 'blinky') { req.resume(); return json(req, res, 403, { error: 'not the mode switch' }); }
+    }
+    let d; try { d = JSON.parse((await readBody(req, 1024)).toString('utf8')); } catch { return json(req, res, 400, { error: 'invalid json' }); }
+    const mode = normalizeFleetMode(d && d.mode);
+    if (!mode) return json(req, res, 400, { error: 'mode must be full, lights-on, or dark' });
+    fleetMode = { mode, by: who, at: new Date().toISOString() };
+    saveFleetMode();
+    seq++; header = mergedHeader(); fullDirty = true;
+    return json(req, res, 200, fleetMode);
   }
   if (p === '/healthz' && (m === 'GET' || m === 'HEAD')) {
     const body = healthBody();
