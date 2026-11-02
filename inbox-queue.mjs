@@ -161,7 +161,7 @@ function preferNewestTip(rows) {
 export function queueView(lines, opts = {}) {
   const wip = Number.isInteger(opts.wip) ? opts.wip : WAKE_WIP;
   const seat = String(opts.seat || '');
-  const rows = preferNewestTip(ranked(lines, opts));
+  const rows = preferNewestTip(ranked(lines, opts)).filter((row) => !row.line || row.line.shed !== true);
   const ready = pick(rows, 0);
   const priority = rows.filter((row) => row.rank === 1 && row.priority).sort(seat ? byMotion : byAge).map((row) => row.line);
   const rest = rows.filter((row) => row.rank === 1 && !row.priority && !row.line.shed).sort(newestFirst).slice(0, opts.nudge ? 0 : wip).map((row) => row.line);
