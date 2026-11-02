@@ -70,6 +70,34 @@ function byLevel(a, b) {
   return byAge(a, b);
 }
 
+function isIssueOpen(row) {
+  return String(row.line && row.line.type || '').toLowerCase() === 'issue_open';
+}
+
+function byMotion(a, b) {
+  const d = (isIssueOpen(a) ? 0 : 1) - (isIssueOpen(b) ? 0 : 1);
+  if (d) return d;
+  if (isIssueOpen(a)) return byAge(b, a);
+  return byLevel(a, b);
+}
+
+const TIP_TYPES = new Set(['issue_comment', 'pr_comment', 'review', 'review_comment', 'comment']);
+
+function cardKey(line) {
+  const repo = String(line && line.repo || '').toLowerCase();
+  const number = Number(line && line.number);
+  if (!repo || !Number.isInteger(number)) return '';
+  return `${repo}#${number}`;
+}
+
+function shedTip(line, shedCards) {
+  if (!shedCards || typeof shedCards.has !== 'function' || shedCards.size === 0) return false;
+  const type = String(line && line.type || '').toLowerCase();
+  if (!TIP_TYPES.has(type)) return false;
+  const key = cardKey(line);
+  return key !== '' && shedCards.has(key);
+}
+
 function zombieHandoff(line, card) {
   const type = String(line && line.type || '').toLowerCase();
   const kind = String(line && line.kind || '').toLowerCase();
@@ -91,6 +119,7 @@ function ranked(lines, opts) {
     const named = rSeat((card && card.packet || {}).raci);
     if (seat && rank !== 0 && rank !== 3 && rank !== 4 && named !== seat.toLowerCase()) rank = 2;
     if (priority && rank !== 0 && rank !== 3 && rank !== 4) rank = 1;
+    if (shedTip(line, opts.shedCards)) rank = 2;
     return { line, index, rank, priority, level: packetLevel(card) };
   });
 }
@@ -108,7 +137,7 @@ export function queueView(lines, opts = {}) {
   const seat = String(opts.seat || '');
   const rows = ranked(lines, opts);
   const ready = pick(rows, 0);
-  const priority = rows.filter((row) => row.rank === 1 && row.priority).sort(seat ? byLevel : byAge).map((row) => row.line);
+  const priority = rows.filter((row) => row.rank === 1 && row.priority).sort(seat ? byMotion : byAge).map((row) => row.line);
   const rest = rows.filter((row) => row.rank === 1 && !row.priority && !row.line.shed).sort(newestFirst).slice(0, opts.nudge ? 0 : wip).map((row) => row.line);
   const head = [...ready, ...priority, ...rest];
   if (head.length) return head;
