@@ -263,6 +263,113 @@ def ci_fail_lines(events, new_events, seat_of):
     return out
 
 
+def _sha_match(left, right):
+    left, right = _low(left), _low(right)
+    if len(left) < 7 or len(right) < 7:
+        return False
+    return left.startswith(right) or right.startswith(left)
+
+
+def _pull_rows(events, repo, number):
+    return [event for event in _events(events) if _repo(event).lower() == repo and _num(event) == number]
+
+
+def _latest_verdict(rows):
+    found = None
+    for event in rows:
+        if _kind(event) not in ("critic_pass", "critic_fail"):
+            continue
+        if found is None or _stamp(event) >= _stamp(found):
+            found = event
+    return found
+
+
+def _packet_owner(rows):
+    owner, stamp = "", ""
+    for event in rows:
+        packet = event.get("packet") if isinstance(event.get("packet"), dict) else None
+        if not packet:
+            continue
+        raw = str(packet.get("next owner") or "").strip()
+        if not raw or _stamp(event) < stamp:
+            continue
+        stamp, owner = _stamp(event), raw.casefold()
+    return owner.split()[0] if owner else ""
+
+
+def critic_still_next(events, repo, number, sha):
+    """True when this green sha still belongs to critic.
+
+    A pass on this sha does not. A prior red, a verdict on another sha, or a
+    packet whose next owner is critic does.
+    """
+    rows = _pull_rows(events, repo, number)
+    verdict = _latest_verdict(rows)
+    if verdict and _kind(verdict) == "critic_pass" and _sha_match(_sha(verdict), sha):
+        return False
+    colors = sha_color(events)
+    for event in rows:
+        ev_sha = _sha(event)
+        if ev_sha and (_kind(event) == "ci_fail" or colors.get((repo, ev_sha)) == "red"):
+            return True
+    if verdict and not _sha_match(_sha(verdict), sha):
+        return True
+    return _packet_owner(rows) == "critic"
+
+
+def _green_signal(event):
+    kind = _kind(event)
+    if kind == "ci_pass":
+        return True
+    if kind not in ("check_suite", "check_run", "workflow_run"):
+        return False
+    if _status(event) in RUNNING:
+        return False
+    return _conclusion(event) == "success"
+
+
+def critic_return_lines(events, new_events):
+    """One ringing critic line when a green head is still critic's.
+
+    The id is wake:critic:<repo>#<number>:<sha>. kind and type are ci_pass so
+    the chat doorbell rings. A pass at that sha produces no line.
+    """
+    rows = _events(events)
+    colors = sha_color(rows)
+    pulls = pull_of_sha(rows)
+    closed = closed_pulls(rows)
+    out = []
+    seen = set()
+    for event in _events(new_events):
+        sha, repo = _sha(event), _repo(event).lower()
+        if not sha or not repo or not _green_signal(event) or colors.get((repo, sha)) != "green":
+            continue
+        number = _num(event) or (pulls.get((repo, sha)) or (None, 0, ""))[1]
+        if not number or (repo, number) in closed:
+            continue
+        if not critic_still_next(rows, repo, number, sha):
+            continue
+        ident = (repo, number, sha)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        title = "green head returns to critic"
+        out.append({
+            "id": f"wake:critic:{repo}#{number}:{sha}",
+            "t_ct": str(event.get("t_ct") or ""),
+            "seat": "critic",
+            "type": "ci_pass",
+            "kind": "ci_pass",
+            "repo": _display_repo(rows, repo),
+            "number": number,
+            "sha": sha,
+            "title": title,
+            "url": _url(rows, repo, number, sha),
+            "reason": title,
+        })
+    return out
+
+
 def ack_ids(lines, events):
     """Open ci_fail ids whose sha is green, or whose pull's current head is green."""
     green = green_keys(events)

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A green head that is still critic's posts one ci_pass line to critic. That line rings the chat. A pass on that sha does not. xray#806 bifrost#32
 - The roster lists `fleet.seats` plus `product_nodes` only. A seat with no signal for 7 days is dormant.
 - The roster calls a 15-minute sighting seen, not active. Working is the same bit as the mesh light. A prompt with no card name does not spin every card.
 - A push, merge, or review lights the mapped seat for the turn window, including an Arch1 merge after the card closes. An outside seat missing from the GitHub actor map still needs `live-inbox --turn start/end`.

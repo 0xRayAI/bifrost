@@ -510,6 +510,7 @@ def cmd_pass(now=None):
             return ""
 
         extra = ci_inbox.ci_fail_lines(cached, adapt(new), ci_seat)
+        extra += ci_inbox.critic_return_lines(cached, adapt(new))
         by_seat = {}
         for line in extra:
             by_seat.setdefault(line["seat"], []).append(line)
