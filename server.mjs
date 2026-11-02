@@ -860,9 +860,21 @@ function itemClosed(repo, number) {
 function lineCard(l) {
   return bfCards.find(x => x.repo && String(x.repo).toLowerCase() === String(l.repo || '').toLowerCase() && Number(x.number) === Number(l.number));
 }
+function cardKeyFromId(id) {
+  const match = String(id || '').match(/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)[#!](\d+)/);
+  return match ? `${match[1].toLowerCase()}#${Number(match[2])}` : '';
+}
+function shedCardsFor(seat) {
+  const keys = new Set();
+  for (const id of inboxPasses[seat] || []) {
+    const key = cardKeyFromId(id);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
 function queueOpts(seat) {
   return {
-    ...(seat ? { seat } : {}),
+    ...(seat ? { seat, shedCards: shedCardsFor(seat) } : {}),
     cardOf: (line) => lineCard(line) || null,
     titleOf: (line) => { const card = lineCard(line); return card && card.title ? String(card.title) : ''; },
   };

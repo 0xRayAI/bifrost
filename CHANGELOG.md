@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A new issue open leads an older parent tip. A passed parent stays shed, so later tips on that card do not take the head. xray queue twin.
 - A green head that is still critic's posts one ci_pass line to critic. That line rings the chat. A pass on that sha does not. xray#806 bifrost#32
 - The roster lists `fleet.seats` plus `product_nodes` only. A seat with no signal for 7 days is dormant.
 - The roster calls a 15-minute sighting seen, not active. Working is the same bit as the mesh light. A prompt with no card name does not spin every card.

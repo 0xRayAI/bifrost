@@ -123,6 +123,24 @@ test('a comment on a P1 card stays in the head even when the cap is full', () =>
   assert.deepEqual(queueView([tip, ...comments], { nudge: true, titleOf: titles }).map((row) => row.id), ['tip']);
 });
 
+test('a new issue open leads an older parent tip, and a passed parent stays shed', () => {
+  const cards = {
+    768: { title: 'P1: unstick', packet: { raci: 'R=Arch1 A=Blaze', goal: 'P1 unstick' } },
+    809: { title: 'P1: wake token', packet: { raci: 'R=Arch1 A=Blaze', goal: 'P1 wake' } },
+    12: { title: 'do the work', packet: { raci: 'R=Arch1 A=Blaze', goal: 'do the work' } },
+  };
+  const cardOf = (row) => cards[row.number] || null;
+  const tip = line('tip', { number: 768, title: 'old parent tip', t: '2026-10-30T08:00:00Z' });
+  const opened = line('open', { type: 'issue_open', number: 809, title: 'P1: wake token', t: '2026-11-02T11:00:00Z' });
+  const ready = line('h', { type: 'packet', kind: 'ready', title: 'handoff ready', t: '2026-11-02T10:00:00Z' });
+  assert.equal(liveLine([tip, opened], { seat: 'arch1', cardOf })[0].id, 'open');
+  assert.equal(liveLine([tip, opened, ready], { seat: 'arch1', cardOf })[0].id, 'h');
+  const later = line('later', { number: 768, title: 'newer parent tip', t: '2026-11-02T12:00:00Z' });
+  const other = line('other', { number: 12, title: 'other card', t: '2026-10-30T09:00:00Z' });
+  const shedCards = new Set(['0xrayai/xray#768']);
+  assert.equal(liveLine([later, tip, other], { seat: 'arch1', cardOf, shedCards })[0].id, 'other');
+});
+
 test('over WIP a new non-P0 comment is stored off the head and is not laddered', () => {
   const ready = line('h', { type: 'packet', kind: 'ready', title: 'handoff ready', t: '2026-10-30T01:00:00Z' });
   const noise = line('old', { type: 'nudge', t: '2026-10-30T02:00:00Z' });
