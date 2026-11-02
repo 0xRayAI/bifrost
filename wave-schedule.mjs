@@ -533,6 +533,82 @@ function eventTouches(card, event, list) {
   return false;
 }
 
+const HANDOFF_LABEL = /^handoff(?:\s+\S+)?$/i;
+
+/** A handoff line is named for its kind. That label is not a GitHub title. */
+export function handoffLabel(title) {
+  return HANDOFF_LABEL.test(String(title || '').trim());
+}
+
+/** Card face copied off an inbox line. A handoff label and its pull URL are not stored. */
+export function packetCardFace(line) {
+  const title = String(line && line.title || '').trim();
+  if (handoffLabel(title)) return { title: '', url: '' };
+  return {
+    title: title.slice(0, 120),
+    url: String(line && line.url || '').slice(0, 300),
+  };
+}
+
+function openedTitle(event) {
+  const title = String(event && event.title || '').trim();
+  if (title && !handoffLabel(title)) return title.slice(0, 120);
+  const label = String(event && event.label || '').replace(/^.*?opened · /, '').trim();
+  if (label && !handoffLabel(label)) return label.slice(0, 120);
+  return '';
+}
+
+function openEvent(events, card) {
+  const repo = String(card && card.repo || '').toLowerCase();
+  const number = Number(card && card.number);
+  if (!repo || !Number.isInteger(number) || number < 1) return null;
+  let hit = null;
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!event || typeof event !== 'object') continue;
+    const kind = String(event.kind || '');
+    if (kind !== 'issue_open' && kind !== 'pr_open') continue;
+    if (String(event.repo || '').toLowerCase() !== repo) continue;
+    if (Number(event.number) !== number) continue;
+    if (!openedTitle(event)) continue;
+    hit = event;
+  }
+  return hit;
+}
+
+function faceUrl(event, card) {
+  const src = typeof event.source === 'string' ? event.source : (typeof event.url === 'string' ? event.url : '');
+  const kind = String(event.kind || '');
+  if (kind === 'issue_open' && src.includes('/issues/')) return src.slice(0, 300);
+  if (kind === 'pr_open' && src.includes('/pull/')) return src.slice(0, 300);
+  const repo = String((card && card.repo) || event.repo || '');
+  const number = Number(card && card.number);
+  if (kind === 'issue_open') return `https://github.com/${repo}/issues/${number}`;
+  if (kind === 'pr_open') return `https://github.com/${repo}/pull/${number}`;
+  return src.slice(0, 300);
+}
+
+/**
+ * A ready handoff must not leave "handoff ready" or a pull URL on an issue card.
+ * The GitHub open event supplies the title and the URL. A card that already has
+ * a real title is left as it is.
+ */
+export function restoreHandoffFace(cards, events) {
+  const list = Array.isArray(cards) ? cards : [];
+  return list.map((card) => {
+    if (!card || typeof card !== 'object') return card;
+    const title = String(card.title || '').trim();
+    const blankPacket = card.born === 'packet' && !title;
+    if (!handoffLabel(title) && !blankPacket) return card;
+    const hit = openEvent(events, card);
+    if (!hit) return card;
+    const nextTitle = openedTitle(hit);
+    const nextUrl = faceUrl(hit, card);
+    const kind = hit.kind === 'issue_open' ? 'issue' : 'pr';
+    if (nextTitle === title && nextUrl === String(card.url || '') && card.kind === kind) return card;
+    return { ...card, title: nextTitle, url: nextUrl || card.url, kind };
+  });
+}
+
 /** Rewrite a holding card onto the PR that pr_open and pr_commit share. */
 export function attachPacketCards(cards, events) {
   const list = (Array.isArray(cards) ? cards : []).filter((card) => card && typeof card === 'object').map((card) => ({ ...card }));
