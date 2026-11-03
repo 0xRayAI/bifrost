@@ -274,10 +274,23 @@ def _pull_rows(events, repo, number):
     return [event for event in _events(events) if _repo(event).lower() == repo and _num(event) == number]
 
 
+def _failed_verify(event):
+    kind = _kind(event)
+    if kind == "critic_fail":
+        return True
+    if kind == "review" and str(event.get("state") or event.get("conclusion") or "").upper() == "CHANGES_REQUESTED":
+        return True
+    if kind not in ("comment", "pr_comment", "issue_comment", "review_comment"):
+        return False
+    blob = " ".join(str(event.get(key) or "") for key in ("title", "label", "reason", "body")).casefold()
+    return "failed verify" in blob or "failed-verify" in blob
+
+
 def _latest_verdict(rows):
     found = None
     for event in rows:
-        if _kind(event) not in ("critic_pass", "critic_fail"):
+        kind = _kind(event)
+        if kind not in ("critic_pass", "critic_fail") and not _failed_verify(event):
             continue
         if found is None or _stamp(event) >= _stamp(found):
             found = event
@@ -307,6 +320,8 @@ def critic_still_next(events, repo, number, sha):
     verdict = _latest_verdict(rows)
     if verdict and _kind(verdict) == "critic_pass" and _sha_match(_sha(verdict), sha):
         return False
+    if verdict and _failed_verify(verdict):
+        return True
     colors = sha_color(events)
     for event in rows:
         ev_sha = _sha(event)
