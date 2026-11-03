@@ -206,6 +206,22 @@ function hourStamps(state, seat, now) {
   return (state.sentAt.get(seat) || []).filter(t => now - t < ROLLING_HOUR_MS && now - t >= 0);
 }
 
+/** Lines held only until the open turn window are due when that turn ends. A longer cooldown stays held. */
+export function releaseForTurn(state, seat, started, now, turnOpenMs) {
+  const cap = started + turnOpenMs;
+  const due = [];
+  const rest = [];
+  for (const item of state.hold || []) {
+    if (item && item.seat === seat && item.until <= cap) {
+      const key = shaKeyOf(seat, item.line);
+      if (state.queuedSha && state.queuedSha.get(key)) state.queuedSha.delete(key);
+      due.push(item.line);
+    } else rest.push(item);
+  }
+  state.hold = rest;
+  return due;
+}
+
 // A new sha inside the cooldown or the rolling hour is queued, not dropped.
 // An unchanged sha is a drop. An empty sha never matches. A hotfix skips both waits.
 export function gateLine(wake, state, now, cfg) {
