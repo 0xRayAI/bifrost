@@ -32,7 +32,7 @@ import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
 import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
-import { normalizeFleetMode, wakeAllowed } from './fleet-mode.mjs';
+import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundary, wakeAllowed } from './fleet-mode.mjs';
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
@@ -728,18 +728,23 @@ const seatIdOf = name => { const t = String(name || '').toLowerCase().replace(/[
     if (SEAT_ALIAS[w]) return SEAT_ALIAS[w];
   } return null; };
 const STATE_DIR = path.join(process.env.MESH_DATA_DIR || '/data', 'live');
-let fleetMode = { mode: 'lights-on', by: 'default', at: '' };
+let fleetMode = { mode: 'lights-on', route: 'none', by: 'default', at: '', source: 'default', boundary: '' };
 function loadFleetMode() {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'fleet-mode.json'), 'utf8'));
     const mode = normalizeFleetMode(raw && raw.mode);
     if (mode) {
-      fleetMode = { mode, by: String(raw.by || 'manual').slice(0, 24), at: String(raw.at || '').slice(0, 40) };
+      fleetMode = {
+        mode, route: normalizeFleetRoute(raw.route) || 'none',
+        by: String(raw.by || 'manual').slice(0, 24), at: String(raw.at || '').slice(0, 40),
+        source: raw.source === 'manual' || raw.source === 'schedule' || raw.source === 'env' ? raw.source : 'manual',
+        boundary: String(raw.boundary || '').slice(0, 40),
+      };
       return;
     }
   } catch { /* file missing: env, else lights-on */ }
   const fromEnv = normalizeFleetMode(process.env.FLEET_MODE);
-  if (fromEnv) fleetMode = { mode: fromEnv, by: 'env', at: '' };
+  if (fromEnv) fleetMode = { mode: fromEnv, route: 'none', by: 'env', at: '', source: 'env', boundary: '' };
 }
 function saveFleetMode() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -1184,6 +1189,7 @@ function recordArch1Beat(_beat, line) {
 }
 const arch1Launch = createArch1Launch({
   env: process.env, dataDir: STATE_DIR, onBeat: recordArch1Beat,
+  routeOf: () => fleetMode.route,
   runningId: line => {
     const repo = String(line && line.repo || '').toLowerCase();
     const num = Number(line && line.number);
@@ -1777,7 +1783,7 @@ function mergedHeader(now = Date.now()) {
   h.wakes = wakeBoard(now);   // last successful wake per seat; quiet past BIFROST_WAKE_QUIET_MINUTES
   h.wake_stats = publicStats(wakeState, now, wakeConfig(process.env).statMs);
   h.routing = ROUTING;   // startup route check (bifrost-init rules)
-  h.fleet_mode = { mode: fleetMode.mode, by: fleetMode.by, at: fleetMode.at };
+  h.fleet_mode = { mode: fleetMode.mode, route: fleetMode.route, by: fleetMode.by, at: fleetMode.at };
   h.clock = typeof clock === 'undefined' ? null : clock.run;   // timed run: deadlines per seat, cleared by a seat move
   h.kinds = [...new Set([...(g?.kinds || []), ...(b?.kinds || [])])].sort();
   h.notes = [...new Set([...(g?.notes || []), ...(b?.notes || [])])];
@@ -2033,7 +2039,15 @@ function flushHeld() {
   postSeatLines({ lines: ready.map((out) => storeFlush(null, out)).filter(Boolean) }, null);
   return true;
 }
+function tickFleetSchedule(now) {
+  const next = applySchedule(fleetMode, now);
+  if (next === fleetMode) return;
+  fleetMode = next;
+  saveFleetMode();
+  seq++; fullDirty = true;
+}
 function governorRun(now = Date.now()) {
+  tickFleetSchedule(now);
   if (flushHeld()) { seq++; fullDirty = true; }
   if (evalNudges(now)) { seq++; fullDirty = true; }
   const scheduled = waveBoard(bfCards, now);
@@ -2754,7 +2768,7 @@ function healthBody() {   // public: counts, times, ages (s) and wake states; no
     cards_behind: behind, stale_status: staleStatus,
     last_tick: passAt ? new Date(passAt).toISOString() : null, stalled,
     history_ready: historyState.ready, history_redis: historyState.redis, history_cards: historyState.cards,
-    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, by: fleetMode.by, at: fleetMode.at }, arch1_launch: arch1Launch.health(), arch1_inbox: arch1InboxDepth(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
+    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, route: fleetMode.route, by: fleetMode.by, at: fleetMode.at }, arch1_launch: arch1Launch.health(), arch1_inbox: arch1InboxDepth(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
   if (warming) body.status = 'warming';
   return body;
 }
@@ -3644,7 +3658,9 @@ async function handle(req, res) {
     let d; try { d = JSON.parse((await readBody(req, 1024)).toString('utf8')); } catch { return json(req, res, 400, { error: 'invalid json' }); }
     const mode = normalizeFleetMode(d && d.mode);
     if (!mode) return json(req, res, 400, { error: 'mode must be full, lights-on, or dark' });
-    fleetMode = { mode, by: who, at: new Date().toISOString() };
+    const route = d && d.route != null ? normalizeFleetRoute(d.route) : (fleetMode.route || 'none');
+    if (!route) return json(req, res, 400, { error: 'route must be arch1, cursor-cloud, grok-cli, or none' });
+    fleetMode = { mode, route, by: who, at: new Date().toISOString(), source: 'manual', boundary: scheduleBoundary(Date.now()) };
     saveFleetMode();
     seq++; header = mergedHeader(); fullDirty = true;
     return json(req, res, 200, fleetMode);

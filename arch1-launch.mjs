@@ -6,6 +6,7 @@
 // https://cursor.com/docs/cloud-agent/api/endpoints
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { cursorLaunchAllowed, priorityWake } from './fleet-mode.mjs';
 import path from 'node:path';
 
 export const ARCH1_CANON = 'arch1';
@@ -188,7 +189,7 @@ function usedOn(state, day) {
 
 const DEAD_STATUS = new Set(['ERROR', 'TIMED_OUT', 'TIMEOUT', 'EXPIRED', 'CANCELLED']);
 
-export function createArch1Launch({ env, dataDir, now = () => Date.now(), onBeat = () => {}, fetchImpl = globalThis.fetch, ownsCard, cardOnBoard, runningId }) {
+export function createArch1Launch({ env, dataDir, now = () => Date.now(), onBeat = () => {}, fetchImpl = globalThis.fetch, ownsCard, cardOnBoard, runningId, routeOf }) {
   const file = path.join(dataDir, 'arch1-launch.json');
   const state = loadState(file);
   const enabled = launchEnabled(env);
@@ -349,6 +350,13 @@ export function createArch1Launch({ env, dataDir, now = () => Date.now(), onBeat
     const kind = realPacketKind(line);
     if (!kind || !isArch1Seat(line.seat)) return;
     if (!enabled) return;
+    if (typeof routeOf === 'function') {
+      let route = 'none';
+      let readable = true;
+      try { route = String(routeOf() || 'none'); }
+      catch { readable = false; }
+      if (!cursorLaunchAllowed({ route, readable, p1: priorityWake(line) })) return;
+    }
     const at = now();
     const day = chicagoDay(at) || 'unknown';
     roll(day);
