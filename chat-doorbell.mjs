@@ -58,7 +58,8 @@ export function seatMessage(line) {
   const url = text(line.url) || `https://github.com/${repo}/pull/${number}`;
   const kind = kindOf(line) || 'ready';
   const card = `${repo}#${number}`;
-  const note = `SendToAgent critic: handoff ${kind} ${card} @${sha.slice(0, 7)} ${url} resume critic_bc`;
+  const order = kind === 'ci_pass' ? 'Strict' : 'clear Quiet';
+  const note = `SendToAgent critic: handoff ${kind} ${card} @${sha.slice(0, 7)} ${url} resume critic_bc ${order}`;
   return {
     seat: 'critic',
     kind: 'seat_message',
