@@ -43,6 +43,17 @@ class CriticReturn(unittest.TestCase):
         lines = ci_inbox.critic_return_lines([opened, green], [green])
         self.assertEqual([line["sha"] for line in lines], [SHA])
 
+    def test_a_failed_verify_comment_rings_the_new_green_head(self):
+        note = ev("tip", "pr_comment", number=9, sha=SHA, title="failed verify", t_ct="2026-10-28T10:03:00-05:00")
+        green = ev("ok", "ci_pass", number=9, sha=SHA2, t_ct="2026-10-28T10:05:00-05:00")
+        lines = ci_inbox.critic_return_lines([note, green], [green])
+        self.assertEqual([line["sha"] for line in lines], [SHA2])
+        self.assertEqual(lines[0]["kind"], "ci_pass")
+        self.assertEqual(lines[0]["seat"], "critic")
+        passed = ev("rev", "critic_pass", number=9, sha=SHA2, t_ct="2026-10-28T10:06:00-05:00")
+        later = ev("ok2", "ci_pass", number=9, sha=SHA2, t_ct="2026-10-28T10:07:00-05:00")
+        self.assertEqual(ci_inbox.critic_return_lines([note, green, passed, later], [later]), [])
+
     def test_a_pass_on_the_old_sha_rings_the_new_green_head(self):
         passed = ev("rev", "critic_pass", number=9, sha=SHA, t_ct="2026-10-28T10:03:00-05:00")
         green = ev("ok", "ci_pass", number=9, sha=SHA2, t_ct="2026-10-28T10:05:00-05:00")
