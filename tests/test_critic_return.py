@@ -60,6 +60,17 @@ class CriticReturn(unittest.TestCase):
         lines = ci_inbox.critic_return_lines([passed, green], [green])
         self.assertEqual([line["sha"] for line in lines], [SHA2])
 
+    def test_a_green_head_acks_a_handoff_ci_fail(self):
+        sha = "e" * 40
+        line = {
+            "id": f"handoff:{R}#9:ci_fail:{sha}",
+            "type": "packet", "kind": "ci_fail", "repo": R, "number": 9, "sha": sha,
+        }
+        red = ev("red", "ci_fail", number=9, sha=sha)
+        self.assertEqual(ci_inbox.ack_ids([line], [red]), [])
+        green = ev("ok", "ci_pass", number=9, sha=sha, t_ct="2026-10-28T11:00:00-05:00")
+        self.assertEqual(ci_inbox.ack_ids([line], [red, green]), [line["id"]])
+
 
 if __name__ == "__main__":
     unittest.main()
