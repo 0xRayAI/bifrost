@@ -20,8 +20,8 @@ test('ready handoffs and a hotfix are the head, and nudges stay back', () => {
 });
 
 test('with no ready handoff, newest comments show, then one oldest nudge, then one station line', () => {
-  const older = line('a', { t: '2026-10-30T01:00:00Z' });
-  const newer = line('b', { t: '2026-10-30T02:00:00Z' });
+  const older = line('a', { number: 1, t: '2026-10-30T01:00:00Z' });
+  const newer = line('b', { number: 2, t: '2026-10-30T02:00:00Z' });
   assert.deepEqual(queueView([newer, older]).map((row) => row.id), ['b', 'a']);
   const n1 = line('n1', { type: 'nudge', t: '2026-10-30T03:00:00Z' });
   const n2 = line('n2', { type: 'nudge', t: '2026-10-30T04:00:00Z' });
@@ -29,6 +29,21 @@ test('with no ready handoff, newest comments show, then one oldest nudge, then o
   const s1 = line('s1', { type: 'nudge', kind: 'station', t: '2026-10-30T05:00:00Z' });
   const s2 = line('s2', { type: 'nudge', kind: 'station', t: '2026-10-30T06:00:00Z' });
   assert.deepEqual(queueView([s1, s2]).map((row) => row.id), ['s2']);
+});
+
+test('the newer tip on the same card is the head', () => {
+  const cards = {
+    566: { title: 'P1: Bifrost fleet mode', packet: { raci: 'R=Arch1 A=Blaze' } },
+    700: { title: 'other card', packet: { raci: 'R=Arch1 A=Blaze' } },
+  };
+  const cardOf = (row) => cards[row.number] || null;
+  const oldTip = line('old', { number: 566, t: '2026-11-02T15:18:00-06:00', title: 'forge comment' });
+  const fresh = line('new', { number: 566, t: '2026-11-02T16:52:00-06:00', title: 'forge comment' });
+  const opts = { seat: 'arch1', cardOf };
+  assert.equal(liveLine([oldTip, fresh], opts)[0].id, 'new');
+  assert.equal(queueView([oldTip, fresh], opts).some((row) => row.id === 'old'), false);
+  const other = line('other', { number: 700, t: '2026-11-02T17:00:00-06:00' });
+  assert.equal(queueView([oldTip, fresh, other], opts).some((row) => row.id === 'other'), true);
 });
 
 test('a comment titled P1 stays back when the packet does not name this seat', () => {
@@ -203,8 +218,8 @@ test('a shed line is never the head, and a ready handoff leads a same-card tip',
 });
 
 test('the live line is the first line of the queue', () => {
-  const older = line('a', { title: 'P0: first', t: '2026-10-30T01:00:00Z' });
-  const newer = line('b', { title: 'P1: second', t: '2026-10-30T02:00:00Z' });
+  const older = line('a', { number: 1, title: 'P0: first', t: '2026-10-30T01:00:00Z' });
+  const newer = line('b', { number: 2, title: 'P1: second', t: '2026-10-30T02:00:00Z' });
   assert.deepEqual(queueView([newer, older]).map((row) => row.id), ['a', 'b']);
   assert.deepEqual(liveLine([newer, older]).map((row) => row.id), ['a']);
 });
