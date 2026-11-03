@@ -1,4 +1,6 @@
 // Acks a ci_fail inbox line once that head is green, or once the pull's current head is green.
+// A merge or close acks every other open line on that card. A merge handoff stays for its review.
+import { isMergeHandoff } from './handoff.mjs';
 
 const FAIL = new Set(['failure', 'failed', 'timed_out', 'cancelled', 'canceled', 'startup_failure', 'action_required']);
 const HEAD = new Set(['pr_open', 'pr_commit', 'pr_force_push', 'pr_update']);
@@ -87,6 +89,40 @@ export function idsToAck(lines, events) {
     if (green.has(repo + '\0' + sha) || (head && green.has(repo + '\0' + head))) {
       if (line.id) ids.push(String(line.id));
     }
+  }
+  return ids;
+}
+
+const CLOSE = new Set(['merged', 'pr_close', 'issue_close', 'pr_closed', 'issue_closed', 'closed']);
+const REOPEN = new Set(['reopen', 'pr_reopen', 'issue_reopen', 'reopened']);
+
+function closedCards(events) {
+  const cards = new Map();
+  for (const event of events || []) {
+    if (!event || typeof event !== 'object') continue;
+    const kind = low(event.kind);
+    if (!CLOSE.has(kind) && !REOPEN.has(kind)) continue;
+    const repo = low(event.repo);
+    const number = numOf(event);
+    if (!repo || !number) continue;
+    const key = repo + '#' + number;
+    const stamp = stampOf(event);
+    const prev = cards.get(key);
+    if (!prev || stamp >= prev[0]) cards.set(key, [stamp, CLOSE.has(kind)]);
+  }
+  const closed = new Set();
+  for (const [key, row] of cards) if (row[1]) closed.add(key);
+  return closed;
+}
+
+export function idsToAckOnClose(lines, events) {
+  const closed = closedCards(events);
+  const ids = [];
+  for (const line of lines || []) {
+    if (!line || typeof line !== 'object' || !line.id || isMergeHandoff(line)) continue;
+    const repo = low(line.repo);
+    const number = numOf(line);
+    if (repo && number && closed.has(repo + '#' + number)) ids.push(String(line.id));
   }
   return ids;
 }
