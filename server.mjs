@@ -22,7 +22,7 @@ import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallS
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat } from './wake-gate.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat } from './wake-gate.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -396,6 +396,7 @@ const SEAT_WEBHOOKS = loadSeatWebhooks();
 const CHAT_DOORBELL = loadChatDoorbells(process.env, SEAT_IDS);
 const wakeQ = new Map();
 const wakeState = createWakeState();
+const turnDirty = new Set();
 const turnTimers = new Map();
 let holdTimer = null;
 let holdAt = Infinity;
@@ -596,11 +597,26 @@ function observeTurn(seat, kind, action) {
     return;
   }
   if (action === 'end') {
+    const started = wakeState.turnOpen.get(id) || 0;
     const prev = turnTimers.get(id);
     if (prev) clearTimeout(prev);
     turnTimers.delete(id);
     wakeState.turnOpen.delete(id);
+    const now = Date.now();
+    const due = started ? releaseForTurn(wakeState, id, started, now, wakeConfig(process.env).turnOpenMs) : [];
+    for (const line of due) enqueuePending(id, line);
     pumpHold();
+    if (started && turnDirty.has(id)) {
+      turnDirty.delete(id);
+      const fresh = seatOpenRows(id, false).filter((line) => {
+        const t = Date.parse(line && line.t_ct || '');
+        return Number.isFinite(t) && t >= started;
+      });
+      if (fresh.length) {
+        const newest = fresh.slice().sort((a, b) => Date.parse(a.t_ct) - Date.parse(b.t_ct)).pop();
+        try { offerLines([newest]); } catch { /* the line stays in the inbox */ }
+      }
+    }
   }
 }
 function wakePayload(seat, batch) {
@@ -626,7 +642,12 @@ async function deliverWake(cfg, body) {
       const res = await fetch(cfg.url, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(8000) });
       const text = await res.text().catch(() => '');
       // Overlay no-op: every line already acked. Not a seat failure, and not worth a retry.
-      if (res.status === 409 && res.headers.get('x-bifrost-wake') === 'noop') return { ok: true, attempts: i, outcome: 'skipped', http: 409 };
+      if (res.status === 409 && res.headers.get('x-bifrost-wake') === 'noop') {
+        let reason = '';
+        try { reason = String(JSON.parse(text).reason || ''); } catch { /* not json */ }
+        if (reason === 'already_done') return { ok: true, attempts: i, outcome: 'skipped', http: 409 };
+        return { ok: false, attempts: i, outcome: 'dropped', http: 409, error: 'claim' };
+      }
       if (res.ok) return { ok: true, attempts: i, outcome: 'delivered' };
       error = 'http_' + res.status;
       detail = wakeDetail(text, key, cfg.url);
@@ -675,6 +696,7 @@ async function flushWake(seat) {
   let result; try { result = await deliverWake(cfg, JSON.stringify(wakePayload(seat, batch))); }
   catch { result = { ok: false, attempts: WAKE_ATTEMPTS, error: 'network', outcome: 'failed' }; }
   const outcome = result.outcome || (result.ok ? 'delivered' : 'failed');
+  if (outcome === 'dropped') turnDirty.add(seat);
   const at = new Date().toISOString();
   if (outcome === 'skipped') console.log(`wake: ${seat} skipped (noop)`);
   else {
