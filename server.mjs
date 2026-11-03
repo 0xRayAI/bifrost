@@ -34,7 +34,7 @@ import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validM
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundary, wakeAllowed } from './fleet-mode.mjs';
 import { createBatch } from './pr-batch.mjs';
-import { idsToAck } from './ci-clear.mjs';
+import { idsToAck, idsToAckOnClose } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
 import { liveLine, backlogOf, nudgeTargets, markShed } from './inbox-queue.mjs';
 const CI_NODES = loadCiNodes();
@@ -2967,7 +2967,9 @@ async function routePass() {
 function ackGreenCi() {
   const events = githubEvents();
   for (const seat of Object.keys(seatInbox)) {
-    for (const id of idsToAck(seatInbox[seat], events)) ackLines(seat, id);
+    const lines = seatInbox[seat];
+    for (const id of idsToAck(lines, events)) ackLines(seat, id);
+    for (const id of idsToAckOnClose(lines, events)) ackLines(seat, id);
   }
 }
 function routeSoon() { if (process.env.SERVER_ROUTING !== 'off') routePass(); }
