@@ -1,8 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { idsToAckOnClose } from '../ci-clear.mjs';
+import { idsToAck, idsToAckOnClose } from '../ci-clear.mjs';
 
 const R = 'example-org/app';
+
+test('a green head acks a handoff ci_fail packet', () => {
+  const sha = 'e'.repeat(40);
+  const line = {
+    id: `handoff:example-org/app#9:ci_fail:${sha}`,
+    type: 'packet', kind: 'ci_fail', repo: 'example-org/app', number: 9, sha,
+  };
+  const open = [{ id: 'red', t_ct: '2026-10-28T10:00:00-05:00', kind: 'ci_fail', repo: 'example-org/app', number: 9, sha }];
+  assert.deepEqual(idsToAck([line], open), []);
+  const green = open.concat([{ id: 'ok', t_ct: '2026-10-28T11:00:00-05:00', kind: 'ci_pass', repo: 'example-org/app', number: 9, sha }]);
+  assert.deepEqual(idsToAck([line], green), [line.id]);
+});
 
 test('a merge acks the card lines and leaves the merge handoff', () => {
   const sha = 'd'.repeat(40);

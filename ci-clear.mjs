@@ -80,7 +80,7 @@ export function idsToAck(lines, events) {
   const ids = [];
   for (const line of lines || []) {
     if (!line || typeof line !== 'object') continue;
-    if (low(line.type || line.kind) !== 'ci_fail') continue;
+    if (low(line.kind) !== 'ci_fail' && low(line.type) !== 'ci_fail') continue;
     const repo = low(line.repo);
     const sha = low(line.sha);
     const number = Number(line.number);

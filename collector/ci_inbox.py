@@ -393,7 +393,7 @@ def ack_ids(lines, events):
     for line in lines or []:
         if not isinstance(line, dict):
             continue
-        if _low(line.get("type") or line.get("kind")) != "ci_fail":
+        if _low(line.get("kind")) != "ci_fail" and _low(line.get("type")) != "ci_fail":
             continue
         repo = _low(line.get("repo"))
         sha = _low(line.get("sha"))
