@@ -239,11 +239,13 @@ export function gateLine(wake, state, now, cfg) {
   const shaKey = shaKeyOf(seat, line);
   const sentSha = state.sentSha.get(shaKey) || '';
   const queuedSha = state.queuedSha.get(shaKey) || '';
-  if (sha && (sha === sentSha || sha === queuedSha)) return { op: 'skip', reason: 'repeat_sha', seat, line };
+  // A green head is a new ring on the same card. The earlier ready must not swallow it.
+  const green = typeOf(line) === 'ci_pass';
+  if (sha && (sha === sentSha || sha === queuedSha) && !green) return { op: 'skip', reason: 'repeat_sha', seat, line };
   const hotfix = isHotfix(line);
   const lastCool = state.cool.get(coolKeyOf(seat, line)) || 0;
   const inCool = !hotfix && !!lastCool && now - lastCool < cfg.cooldownMs;
-  const freshSha = !!sha && sha !== sentSha;
+  const freshSha = (!!sha && sha !== sentSha) || green;
   const stamps = hourStamps(state, seat, now);
   const over = !hotfix && stamps.length >= cfg.maxPerHour;
   let until = 0;
