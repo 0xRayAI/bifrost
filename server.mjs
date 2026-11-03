@@ -744,7 +744,9 @@ function loadFleetMode() {
     }
   } catch { /* file missing: env, else lights-on */ }
   const fromEnv = normalizeFleetMode(process.env.FLEET_MODE);
-  if (fromEnv) fleetMode = { mode: fromEnv, route: 'none', by: 'env', at: '', source: 'env', boundary: '' };
+  const routeEnv = normalizeFleetRoute(process.env.FLEET_ROUTE);
+  if (fromEnv) fleetMode = { mode: fromEnv, route: routeEnv || 'none', by: 'env', at: '', source: 'env', boundary: '' };
+  else if (routeEnv) fleetMode = { ...fleetMode, route: routeEnv };
 }
 function saveFleetMode() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
