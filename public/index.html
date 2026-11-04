@@ -11,7 +11,7 @@
     document.documentElement.setAttribute('data-theme', theme);
   })();
   </script>
-  <title>🌈 Live board · Bifrost live fleet</title>
+  <title>🌈 Bifrost · live fleet</title>
 <link rel="icon" href="data:,">
   <style>
 /* theme-tokens-start */
@@ -361,7 +361,7 @@ header .title { animation: rise .6s ease-out both; }
 #mark { width: 112px; height: 44px; flex: none; }
 .pill { display: inline-block; width: 11ch; text-align: center; white-space: nowrap; flex: none; font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--teal); color: var(--pill-fg); background: var(--pill-bg); }
 .pill::before { content: "\25CF  "; color: var(--pill-live); animation: blink 1.6s ease-in-out infinite; }
-.fleet { margin-left: auto; text-align: right; white-space: nowrap; font-size: 11px; line-height: 1.5; color: var(--dim); font-variant-numeric: tabular-nums; }
+.fleet { margin-left: 0; text-align: right; white-space: nowrap; font-size: 11px; line-height: 1.5; color: var(--dim); font-variant-numeric: tabular-nums; }
 .fleet b { color: var(--text); font-weight: 600; }
 #blackout { color: var(--warn); font-weight: 700; font-size: 13px; letter-spacing: .02em; }
 .pill.off { border-color: var(--line); color: var(--dim); background: var(--pill-off-bg); }
@@ -616,10 +616,17 @@ footer a { color: var(--foot); }
 <body>
 <main>
   <header>
-    <div class="title"><h1>🌈 Live board</h1><span class="pill" id="pill">LIVE</span><span class="spectrum-pill" id="spectrumPill" hidden>Spectrum</span><span class="spectrum-meter" id="spectrumMeter" hidden aria-hidden="true"></span><button id="themeToggle" type="button" aria-label="Color theme">☀</button></div>
+    <div class="title">
+      <canvas id="mark" width="112" height="44" role="img" aria-label="0xRay"></canvas>
+      <h1>🌈 Bifrost</h1>
+      <span class="pill" id="pill">LIVE</span>
+      <span class="spectrum-pill" id="spectrumPill" hidden>Spectrum</span>
+      <span class="spectrum-meter" id="spectrumMeter" hidden aria-hidden="true"></span>
+      <div class="fleet" hidden><b id="fleet"></b><span id="blackout"></span></div>
+      <button id="themeToggle" type="button" aria-label="Color theme">☀</button>
+    </div>
     <p class="status" id="status">Loading…</p>
     <p class="fresh" id="fresh"><span class="fresh-dot"></span><span id="freshText">Loading…</span></p>
-    <div hidden><canvas id="mark" width="112" height="44"></canvas><b id="fleet"></b><span id="blackout"></span></div>
   </header>
 
   <div class="fold" data-fold="stats" id="statsFold">
