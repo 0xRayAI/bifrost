@@ -263,6 +263,8 @@ export function nudgeTargets(lines, opts = {}) {
 export function markShed(line, openLines, opts = {}) {
   if (!line || line.shed) return line;
   if (!overWip(openLines, opts)) return line;
+  // Never shed into an empty head: with nothing live in the queue, this line becomes the head.
+  if (queueView(openLines, opts).length === 0) return line;
   const titleOf = typeof opts.titleOf === 'function' ? opts.titleOf : () => '';
   const cardOf = typeof opts.cardOf === 'function' ? opts.cardOf : () => null;
   const card = cardOf(line);

@@ -223,3 +223,34 @@ test('the live line is the first line of the queue', () => {
   assert.deepEqual(queueView([newer, older]).map((row) => row.id), ['a', 'b']);
   assert.deepEqual(liveLine([newer, older]).map((row) => row.id), ['a']);
 });
+
+const shedRows = (n) => Array.from({ length: n }, (_, i) => line(`s${i}`, { number: 100 + i, shed: true, t: `2026-11-01T10:${String(i).padStart(2, '0')}:00Z` }));
+
+test('56 shed rows plus one new tip: the new tip is not shed and is the head (#67)', () => {
+  const open = shedRows(56);
+  assert.equal(queueView(open).length, 0);
+  const tip = markShed(line('tip', { number: 987, t: '2026-11-10T10:00:00Z' }), open);
+  assert.equal(tip.shed, undefined);
+  const head = queueView([...open, tip]);
+  assert.equal(head.length, 1);
+  assert.equal(head[0].id, 'tip');
+});
+
+test('an all-shed inbox keeps an empty head, and the next line of any kind still gets in (#67)', () => {
+  const open = shedRows(56);
+  assert.deepEqual(queueView(open), []);
+  assert.equal(overWip(open), true);
+  for (const extra of [{ title: 'a comment' }, { type: 'issue_open', title: 'new issue' }, { type: 'nudge', title: 'nudge' }]) {
+    const next = markShed(line('n', { number: 987, t: '2026-11-10T10:00:00Z', ...extra }), open);
+    assert.notEqual(next.shed, true);
+    assert.equal(liveLine([...open, next])[0].id, 'n');
+  }
+});
+
+test('over WIP with a non-empty head still sheds a new comment (#67)', () => {
+  const open = [...shedRows(5), line('live', { number: 900, t: '2026-11-09T10:00:00Z' }), line('live2', { number: 901, t: '2026-11-09T11:00:00Z' })];
+  const wip = { wip: 1 };
+  assert.equal(overWip(open, wip), true);
+  const fresh = markShed(line('late', { number: 902, t: '2026-11-10T10:00:00Z' }), open, wip);
+  assert.equal(fresh.shed, true);
+});
