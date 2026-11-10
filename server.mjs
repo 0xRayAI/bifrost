@@ -2932,11 +2932,12 @@ function readBeatClock() {
   applyCollectorHeader(hdr);
 }
 function readCollectorFeed() {   // every 2 s: ingest the collector's file when it changed. The parse runs off the request thread.
+  readBeatClock();   // the beat moves the watchdog clock every pass, even while a big feed parse is in flight
   let st;
   try { st = fs.statSync(GH_FEED); }
-  catch { readBeatClock(); return Promise.resolve(); }
+  catch { return Promise.resolve(); }
   const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
-  if (sig === collector.sig) { readBeatClock(); return Promise.resolve(); }
+  if (sig === collector.sig) return Promise.resolve();
   if (feedRead) { feedRead.again = true; return feedRead.promise; }
   let resolve;
   const promise = new Promise(r => { resolve = r; });
