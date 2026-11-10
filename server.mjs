@@ -36,7 +36,7 @@ import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundar
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck, idsToAckOnClose } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
-import { liveLine, backlogOf, nudgeTargets, markShed } from './inbox-queue.mjs';
+import { liveLine, backlogOf, nudgeTargets, markShed, settleShed, shedTtlMs } from './inbox-queue.mjs';
 const CI_NODES = loadCiNodes();
 const batch = createBatch();
 
@@ -1044,6 +1044,23 @@ function saveSeatInbox(s) {
   const cut = Date.now() - 7 * 86400000;
   seatInbox[s] = seatInbox[s].filter(l => !(Date.parse(l.t_ct) < cut)).slice(-5000);
   bfWrite('inbox/' + s + '.jsonl', seatInbox[s].map(l => JSON.stringify(l)).join('\n') + '\n');
+}
+const SHED_TTL_MS = shedTtlMs(process.env);
+function sweepShed(now = Date.now()) {
+  let changed = false;
+  for (const seat of SEAT_IDS) {
+    const arr = seatInbox[seat];
+    if (!Array.isArray(arr) || !arr.length) continue;
+    const acked = ackedSet(seat);
+    const result = settleShed(arr, { now, ttlMs: SHED_TTL_MS, isSettled: settledLine, skip: (line) => acked.has(line.id) });
+    if (!result.settled.length && !result.unshed.length) continue;
+    seatInbox[seat] = result.lines;
+    for (const line of result.settled) ackLines(seat, line.id);
+    saveSeatInbox(seat);
+    console.log(`inbox: settle-shed ${seat} settled ${result.settled.length} unshed ${result.unshed.length}`);
+    changed = true;
+  }
+  return changed;
 }
 // Startup route check (same rules as tools/bifrost-init --check): a seat with no route, or a rule routing to a seat
 // outside the fleet, is logged loudly and shown on the board (header.routing, /healthz routing). Never a crash.
@@ -2159,6 +2176,7 @@ function tickFleetSchedule(now) {
   seq++; fullDirty = true;
 }
 function governorRun(now = Date.now()) {
+  if (sweepShed(now)) { seq++; fullDirty = true; }
   tickFleetSchedule(now);
   if (flushHeld()) { seq++; fullDirty = true; }
   if (evalNudges(now)) { seq++; fullDirty = true; }
@@ -4350,6 +4368,7 @@ async function historyEvents(date) {
 async function openMesh() {
   // The first read finishes before the port opens, so health and the board see the feed.
   if (process.env.COLLECTOR !== 'off') await readCollectorFeed();
+  try { if (sweepShed()) { seq++; fullDirty = true; } } catch { /* the next governor tick retries */ }
   server.listen(PORT, '0.0.0.0', () => {
   const bound = server.address().port;
   const webhookBase = String(process.env.CURSOR_WEBHOOK_BASE || '');

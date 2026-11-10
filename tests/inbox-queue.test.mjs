@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { backlogOf, keepStation, lineRank, liveLine, markShed, nudgeTargets, overWip, queueView, rSeat } from '../inbox-queue.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { backlogOf, keepStation, lineRank, liveLine, markShed, nudgeTargets, overWip, queueView, rSeat, settleShed, shedTtlMs } from '../inbox-queue.mjs';
 
 const line = (id, extra) => ({ id, t_ct: extra.t || '2026-10-30T10:00:00Z', type: 'issue_comment', repo: '0xRayAI/xray', number: 1, title: id, url: '', reason: 'ask', ...extra });
 
@@ -224,7 +227,7 @@ test('the live line is the first line of the queue', () => {
   assert.deepEqual(liveLine([newer, older]).map((row) => row.id), ['a']);
 });
 
-const shedRows = (n) => Array.from({ length: n }, (_, i) => line(`s${i}`, { number: 100 + i, shed: true, t: `2026-11-01T10:${String(i).padStart(2, '0')}:00Z` }));
+const shedRows = (n) => Array.from({ length: n }, (_, i) => line(`s${i}`, { number: 100 + i, shed: true, t: `2026-11-01T${String(10 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z` }));
 
 test('56 shed rows plus one new tip: the new tip is not shed and is the head (#67)', () => {
   const open = shedRows(56);
@@ -253,4 +256,52 @@ test('over WIP with a non-empty head still sheds a new comment (#67)', () => {
   assert.equal(overWip(open, wip), true);
   const fresh = markShed(line('late', { number: 902, t: '2026-11-10T10:00:00Z' }), open, wip);
   assert.equal(fresh.shed, true);
+});
+
+test('63 shed rows: closed targets settle, open targets unshed, head is non-empty, open count drops (#69)', () => {
+  const rows = shedRows(63);
+  assert.equal(queueView(rows).length, 0);
+  assert.equal(overWip(rows), true);
+  const closed = new Set(rows.slice(0, 40).map((row) => `0xrayai/xray#${row.number}`));
+  const now = Date.parse('2026-11-10T11:00:00-06:00');
+  const result = settleShed(rows, {
+    now,
+    ttlMs: 30 * 86400000,
+    isSettled: (row) => closed.has(`0xrayai/xray#${row.number}`),
+  });
+  assert.equal(result.settled.length, 40);
+  assert.equal(result.unshed.length, 23);
+  assert.ok(result.unshed.every((row) => row.shed !== true));
+  assert.ok(result.unshed.every((row) => row.t_ct === rows.find((src) => src.id === row.id).t_ct));
+  const open = result.lines.filter((row) => row.shed !== true);
+  assert.equal(open.length, 23);
+  const head = queueView(open);
+  assert.ok(head.length > 0);
+  assert.equal(liveLine(open).length, 1);
+  assert.ok(open.length < rows.length);
+});
+
+test('a shed row at or past the TTL is settled, a younger one is unshed (pinned clock) (#69)', () => {
+  const now = Date.parse('2026-11-10T12:00:00-06:00');
+  const ttlMs = 24 * 3600 * 1000;
+  const aged = line('aged', { number: 1, shed: true, t: '2026-11-09T12:00:00-06:00' });
+  const older = line('older', { number: 2, shed: true, t: '2026-11-08T12:00:00-06:00' });
+  const fresh = line('fresh', { number: 3, shed: true, t: '2026-11-10T00:00:00-06:00' });
+  const result = settleShed([aged, older, fresh], { now, ttlMs, isSettled: () => false });
+  assert.deepEqual(result.settled.map((row) => row.id), ['aged', 'older']);
+  assert.deepEqual(result.unshed.map((row) => row.id), ['fresh']);
+  assert.equal(result.unshed[0].shed, undefined);
+  assert.equal(result.unshed[0].t_ct, fresh.t_ct);
+  assert.equal(shedTtlMs({}), 86400000);
+  assert.equal(shedTtlMs({ BIFROST_SHED_TTL_S: '3600' }), 3600000);
+  assert.equal(shedTtlMs({ BIFROST_SHED_TTL_S: '0' }), 86400000);
+});
+
+test("queueOpts('arch1') includes shedCards at the markShed guard (#69)", () => {
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs'), 'utf8');
+  assert.match(src, /function queueOpts\(seat\)/);
+  assert.match(src, /shedCards:\s*shedCardsFor\(seat\)/);
+  assert.match(src, /if \(s === 'arch1'\) stored = markShed\(stored, seatOpenRows\(s, false\), queueOpts\(s\)\)/);
+  assert.match(src, /if \(sweepShed\(now\)\)/);
+  assert.match(src, /try \{ if \(sweepShed\(\)\)/);
 });

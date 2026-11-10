@@ -260,6 +260,37 @@ export function nudgeTargets(lines, opts = {}) {
   });
 }
 
+export function shedTtlMs(env = process.env) {
+  const n = Number(env && env.BIFROST_SHED_TTL_S);
+  return (Number.isFinite(n) && n > 0 ? n : 86400) * 1000;
+}
+
+/** Closed or aged shed rows are listed as settled (the caller acks). Still-open targets are unshed, keeping t_ct, so they rejoin the normal queue. */
+export function settleShed(lines, opts = {}) {
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const ttlMs = Number.isFinite(opts.ttlMs) && opts.ttlMs > 0 ? opts.ttlMs : shedTtlMs();
+  const isSettled = typeof opts.isSettled === 'function' ? opts.isSettled : () => false;
+  const skip = typeof opts.skip === 'function' ? opts.skip : () => false;
+  const out = [];
+  const settled = [];
+  const unshed = [];
+  for (const line of Array.isArray(lines) ? lines : []) {
+    if (!line || line.shed !== true || skip(line)) { out.push(line); continue; }
+    const t = Date.parse(line.t_ct);
+    const aged = Number.isFinite(t) && now - t >= ttlMs;
+    if (aged || isSettled(line)) {
+      settled.push(line);
+      out.push(line);
+      continue;
+    }
+    const next = { ...line };
+    delete next.shed;
+    unshed.push(next);
+    out.push(next);
+  }
+  return { lines: out, settled, unshed };
+}
+
 export function markShed(line, openLines, opts = {}) {
   if (!line || line.shed) return line;
   if (!overWip(openLines, opts)) return line;

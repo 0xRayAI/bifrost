@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A shed inbox row whose card is already closed or merged is acked. A still-open shed row is unshed back into the queue, keeping its original time. Shed rows older than `BIFROST_SHED_TTL_S` (default 24h) are acked. The sweep runs at boot and on the governor tick. #69
 - A line marked shed is never the live head, including the rank-2 fallback. A ready handoff still leads a same-card tip. xray#823
 - An unassigned issue wakes arch1 when forge is dark, and forge otherwise. xray#815
 - A newer merge tip on the same pull is the live head. An older tip on that pull does not stay in front. A ready handoff still leads. xray#813 bifrost#39
