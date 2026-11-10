@@ -1151,14 +1151,6 @@ def _keep_public(feed: dict, out: Path) -> None:
         feed["public"] = True
 
 
-def _write_beat(feed: dict, out: Path) -> None:
-    """Small header-only clock file. The server watchdog reads it so a slow parse of the big feed is not a stall."""
-    path = out.with_suffix(".beat.json")
-    tmp = path.with_suffix(f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps({k: v for k, v in feed.items() if k != "events"}, ensure_ascii=False, separators=(",", ":")) + "\n")
-    os.replace(tmp, path)
-
-
 def write(feed: dict, out: Path) -> int:
     _keep_public(feed, out)
     _keep_box_working(feed, out)
@@ -1186,7 +1178,6 @@ def write(feed: dict, out: Path) -> int:
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(feed, indent=2, ensure_ascii=False) + "\n")
     os.replace(tmp, out)
-    _write_beat(feed, out)
     if new:
         with stream.open("a") as f:
             for e in new:
