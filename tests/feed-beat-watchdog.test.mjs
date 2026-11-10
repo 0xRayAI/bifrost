@@ -19,7 +19,7 @@ test('a fresh beat keeps a collector alive while the feed parse never lands', as
   fs.writeFileSync(path.join(bin, 'python3'), `#!/bin/sh
 out=""; while [ $# -gt 0 ]; do [ "$1" = "--out" ] && out="$2"; shift; done
 beat="\${out%.json}.beat.json"; i=0
-while :; do i=$((i+1)); printf '{"events":[%s' "$i" > "$out"; printf '{"generated_at":"t%s"}\\n' "$i" > "$beat"; sleep 0.3; done
+while kill -0 $PPID 2>/dev/null; do i=$((i+1)); printf '{"events":[%s' "$i" > "$out"; printf '{"generated_at":"t%s"}\\n' "$i" > "$beat"; sleep 0.3; done
 `, { mode: 0o755 });
   const child = spawn(process.execPath, [path.join(APP, 'server.mjs')], {
     env: {
@@ -39,6 +39,12 @@ while :; do i=$((i+1)); printf '{"events":[%s' "$i" > "$out"; printf '{"generate
     await new Promise(r => setTimeout(r, 8000));   // limit is 3 s (1 s x 3); give it well over two limits
     assert.doesNotMatch(logs, /feed loop stalled/, logs.slice(-2000));
   } finally {
-    child.kill('SIGKILL');
+    const gone = new Promise(r => child.once('exit', r));
+    child.kill('SIGTERM');
+    await Promise.race([gone, new Promise(r => setTimeout(r, 3000))]);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await new Promise(r => setTimeout(r, 600));   // stub sees its parent gone on the next pass and exits
+    fs.rmSync(data, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
   }
 });
