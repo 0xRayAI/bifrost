@@ -121,6 +121,7 @@ NODES = HERE / "fleet-nodes.json"
 # #275 guardrails. Pulses (owner / seat-to-seat messages, turns, tasks, cloud agents) show on the board only: never
 # an inbox line, never a wake. Actionable kinds with no owner seat, or owned only by a seat with no webhook
 # (roles.fallback.from, e.g. arch1), also go to the coordinator (roles.fallback.seat).
+COMMENT_KINDS = ("pr_comment", "issue_comment", "review_comment", "comment")
 PULSE_KINDS = ("prompt", "turn", "subagent", "watcher", "cloud_agent", "cloud_", "board_", "lab_")
 ACTIONABLE = ("pr_open", "review", "pr_comment", "review_comment", "issue_comment", "comment", "issue_open",
               "review_requested", "nudge", "packet")
@@ -284,6 +285,10 @@ def _direct_all(event, roles):
         if line:
             out.append(line)
     me = actor_seat(event, roles)
+    if me and ours and me in ours and kind in COMMENT_KINDS:
+        for l in out:   # who wrote the comment, so Bifrost can keep seat-to-seat comments off the wake path
+            if l.get("type") in COMMENT_KINDS and l.get("seat") != me:
+                l["from"] = me
     seen, uniq = set(), []
     for l in out:   # one line per seat per event
         k = (l.get("seat"), l.get("id"))
