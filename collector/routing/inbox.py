@@ -21,7 +21,8 @@ _BANNED = re.compile(r"body|text|message", re.I)
 _SECRET = re.compile(r"ghs_|github_pat_|BEGIN PRIVATE|AKIA[0-9A-Z]{16}")
 _SEAT_FILE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 # kind stays: the queue head treats a packet with kind ready as the doorbell. The server accepts it.
-_FIELDS = ("id", "t_ct", "seat", "type", "repo", "number", "sha", "title", "url", "reason", "kind")
+# from (xray#976) names the seat that wrote a comment; only a comment line from a seat carries it.
+_FIELDS = ("id", "t_ct", "seat", "type", "repo", "number", "sha", "title", "url", "reason", "kind", "from")
 
 
 def default_roles() -> dict:

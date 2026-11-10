@@ -2,9 +2,20 @@
 // Unassigned issue_open (and a P1 label on an issue) wakes the default seat. That is forge, or arch1 when forge is dark. Blinky's routed copy is stored, not woken.
 // A pr_comment stored for blinky and the author wakes the author. Blinky is the extra copy.
 // A missing sha is never a repeat. The hour is a rolling 60 minutes. flag: hotfix skips the cap and the kind cooldown.
+// A comment authored by a fleet seat bot (line.from is a fleet seat id) never wakes another fleet seat. It stays on the
+// board only, unless it carries a real change: a new head sha, a verdict, or a handoff kind. Human comments (no seat
+// `from`) wake as before. A seat outside the fleet (cfg.isExternal, the roster's `outside` list, e.g. arch1) is not
+// filtered either way: a comment to it or from it wakes as before, and the breaker never pauses it. Forge tips an
+// outside party only by @-mentioning it in a comment.
+// The repeat key of a seat comment is repo#n plus the head sha, or `nosha`. It is never the comment id.
+// More than SEAT_COMMENT_LIMIT seat comments on one repo#n inside a rolling hour trips a breaker: that repo#n is paused
+// for an hour (a human comment clears it) and one needs_human line goes to the coordinator for Blaze.
 
 export const ROLLING_HOUR_MS = 60 * 60 * 1000;
 const COMMENT = new Set(['pr_comment', 'issue_comment', 'review_comment', 'comment']);
+export const SEAT_COMMENT_LIMIT = 3;
+const REAL_CHANGE_KINDS = new Set(['ready', 'critic_fail', 'live_pass', 'merge', 'ci_fail', 'ci_pass', 'review', 'verdict']);
+const DEFAULT_SEATS = ['builder', 'builder-cloud', 'arch1', 'forge', 'critic', 'blinky', 'herald', 'nibbler', 'sound', 'magnet'];
 
 const num = (env, name) => {
   if (env[name] == null || String(env[name]).trim() === '') return null;
@@ -40,6 +51,7 @@ export function defaultIssueSeat(env = {}) {
 export function createWakeState() {
   return {
     sentSha: new Map(), queuedSha: new Map(), cool: new Map(), sentAt: new Map(), turnOpen: new Map(),
+    commentSha: new Map(), seatComments: new Map(), breaker: new Map(),
     hold: [], sent: [], skips: [],
   };
 }
@@ -49,11 +61,15 @@ const typeOf = line => String(line && (line.type || line.kind) || '').trim().toL
 const repoKey = line => `${String(line && line.repo || '').trim().toLowerCase()}#${Number.isInteger(line && line.number) ? line.number : Number(line && line.number) || 0}`;
 const shaKeyOf = (seat, line) => `${seat}|${repoKey(line)}`;
 const coolKeyOf = (seat, line) => `${seat}|${typeOf(line)}|${repoKey(line)}`;
+const kindOf = line => String(line && line.kind || '').trim().toLowerCase();
+export const isCommentLine = line => COMMENT.has(typeOf(line));
+/** The repeat key of a comment line: the issue or PR plus the linked head sha, or `nosha`. Never the comment id. */
+export const commentRepeatKey = (seat, line) => `${seat}|${repoKey(line)}|${shaOf(line) || 'nosha'}`;
 
 export function hasSha(line) {
   return !!(line && typeof line.sha === 'string' && line.sha.trim());
 }
-const shaOf = line => (hasSha(line) ? line.sha.trim() : '');
+function shaOf(line) { return hasSha(line) ? line.sha.trim() : ''; }
 
 export function labelsOf(line) {
   const raw = line && line.labels;
@@ -222,12 +238,79 @@ export function releaseForTurn(state, seat, started, now, turnOpenMs) {
   return due;
 }
 
+function seatTest(cfg) {
+  if (cfg && typeof cfg.isSeat === 'function') return cfg.isSeat;
+  const known = new Set(DEFAULT_SEATS);
+  return from => known.has(String(from || '').trim().toLowerCase());
+}
+/** True for a seat outside the fleet (the roster's `outside` list). Nothing is outside unless the config says so. */
+export function isExternalSeat(seat, cfg) {
+  return !!(cfg && typeof cfg.isExternal === 'function' && cfg.isExternal(String(seat || '').trim().toLowerCase()));
+}
+/** True when a comment line was written by a fleet seat bot. A comment from an outside seat is a person's comment here. */
+export function isSeatComment(line, cfg) {
+  if (!isCommentLine(line)) return false;
+  const from = String(line.from || '').trim().toLowerCase();
+  return !!from && seatTest(cfg)(from) && !isExternalSeat(from, cfg);
+}
+/** A comment that reports something CI or the board did not already say: a handoff kind or a verdict. */
+export function carriesRealChange(line) {
+  return REAL_CHANGE_KINDS.has(kindOf(line)) || REAL_CHANGE_KINDS.has(typeOf(line));
+}
+const isClockLine = line => !!line && (line.clock === true || typeOf(line) === 'timed_run' || String(line.id || '').startsWith('clock:'));
+const isNeedsHuman = line => typeOf(line) === 'needs_human' || kindOf(line) === 'needs_human';
+
+/**
+ * Seat-to-seat comment guard. Returns null to let the normal gate decide, or a skip decision.
+ * It also counts seat comments for the breaker (one count per comment id, whatever seat copy it is).
+ */
+export function commentGuard(wake, state, now, cfg) {
+  const seat = wake.seat;
+  const line = wake.line;
+  const key = repoKey(line);
+  const keyed = !!(line && line.repo) && !/#0$/.test(key);
+  if (!keyed) return null;
+  const brk = state.breaker.get(key);
+  if (isCommentLine(line) && !isSeatComment(line, cfg)) {
+    if (brk) state.breaker.delete(key);   // a person spoke: the pause on this repo#n ends
+    return null;
+  }
+  const outsideTarget = isExternalSeat(seat, cfg);   // a seat outside the fleet is never filtered and never paused
+  if (isSeatComment(line, cfg) && !outsideTarget) {
+    const id = String(line.id || '');
+    const rows = (state.seatComments.get(key) || []).filter(r => now - r.t < ROLLING_HOUR_MS && now - r.t >= 0);
+    if (!rows.some(r => r.id === id)) rows.push({ t: now, id });
+    state.seatComments.set(key, rows);
+    if (rows.length > SEAT_COMMENT_LIMIT) {
+      const cur = state.breaker.get(key);
+      if (!cur || cur.until <= now) {
+        state.breaker.set(key, { until: now + ROLLING_HOUR_MS, since: now });
+        return { op: 'skip', reason: 'breaker', seat, line, needsHuman: true };
+      }
+      return { op: 'skip', reason: 'breaker', seat, line };
+    }
+    if (isHotfix(line) || carriesRealChange(line)) return null;
+    const sha = shaOf(line);
+    if (sha && sha !== state.sentSha.get(shaKeyOf(seat, line)) && sha !== state.commentSha.get(commentRepeatKey(seat, line))) {
+      return null;   // a new head: a real change
+    }
+    return { op: 'skip', reason: sha ? 'repeat_sha' : 'seat_comment', seat, line };
+  }
+  if (brk && brk.until > now && !outsideTarget && !isHotfix(line) && !isNeedsHuman(line) && !isClockLine(line)) {
+    return { op: 'skip', reason: 'breaker', seat, line };
+  }
+  if (brk && brk.until <= now) state.breaker.delete(key);
+  return null;
+}
+
 // A new sha inside the cooldown or the rolling hour is queued, not dropped.
 // An unchanged sha is a drop. An empty sha never matches. A hotfix skips both waits.
 export function gateLine(wake, state, now, cfg) {
   const seat = wake.seat;
   const line = wake.line;
   if (cfg.paused) return { op: 'skip', reason: 'paused', seat, line };
+  const guard = commentGuard(wake, state, now, cfg);
+  if (guard) return guard;
   const clock = isLadder(line);
   const turnAt = state.turnOpen.get(seat) || 0;
   const inTurn = !!(turnAt && now - turnAt < cfg.turnOpenMs);
@@ -271,6 +354,7 @@ export function noteSent(state, seat, lines, now) {
     counted = true;
     const sha = shaOf(line);
     const key = shaKeyOf(seat, line);
+    if (isCommentLine(line)) state.commentSha.set(commentRepeatKey(seat, line), sha || 'nosha');
     if (sha) {
       state.sentSha.set(key, sha);
       if (state.queuedSha.get(key) === sha) state.queuedSha.delete(key);

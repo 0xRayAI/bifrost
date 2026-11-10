@@ -517,8 +517,58 @@ function wakeLineKept(line) {
   if (lineHandled(seat, line)) return false;
   return true;
 }
-function offerLines(lines) {
+// A seat bot's own GitHub login (inbox-roles, fleet-nodes, LIVE_NODE_MAP, seat ids) marks a comment as seat-to-seat.
+// Seats outside the fleet (the roster's `outside` list, e.g. arch1, plus LIVE_OUTSIDE_SEATS). A comment to or from one of
+// them is never filtered by the seat-comment rule and never paused by the breaker.
+let outsideSeatSet = null;
+function outsideSeats() {
+  if (outsideSeatSet) return outsideSeatSet;
+  const out = new Set(String(process.env.LIVE_OUTSIDE_SEATS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean));
+  const files = [
+    process.env.BIFROST_ROSTER,
+    path.join(COLLECTOR_DIR_EARLY(), 'fleet-roster.json'),
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'feed', 'fleet-roster.json'),
+  ].filter(Boolean);
+  for (const file of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (data && Array.isArray(data.outside)) { for (const x of data.outside) out.add(String(x).trim().toLowerCase()); break; }
+    } catch { /* try the next roster */ }
+  }
+  outsideSeatSet = out;
+  return out;
+}
+function wakeCfg() {
   const cfg = wakeConfig(process.env);
+  cfg.isExternal = who => { const low = String(who || '').trim().toLowerCase(); return !!low && (outsideSeats().has(low) || outsideSeats().has(canonSeat(low))); };
+  cfg.isSeat = from => {
+    const low = String(from || '').trim().toLowerCase();
+    if (!low) return false;
+    if (SEAT_IDS.includes(canonSeat(low))) return true;
+    return loginMap().has(low);
+  };
+  return cfg;
+}
+// The breaker tripped on repo#n: one needs_human line to the coordinator, one per rolling hour.
+function flagBreaker(line, now) {
+  try {
+    const repo = String(line && line.repo || '');
+    const number = Number(line && line.number);
+    if (!repo || !Number.isInteger(number) || number < 1) return;
+    const seat = cosSeat();
+    const out = {
+      id: `breaker:${repo}#${number}:${Math.floor(now / 3600000)}`.slice(0, 300), t_ct: ctStamp(now), seat,
+      type: 'needs_human', kind: 'needs_human', to: 'human', repo, number,
+      title: `seat comment loop on #${number}: wakes paused`.slice(0, 120),
+      url: String(line.url || '').slice(0, 300),
+      reason: 'breaker: over 3 seat comments in an hour, wakes paused',
+    };
+    console.log(`wake: breaker ${repo}#${number}`);
+    postSeatLines({ lines: [out] }, null);
+  } catch { /* the skip is already recorded */ }
+}
+function offerLines(lines) {
+  const cfg = wakeCfg();
   const { wakes, skips } = classifyBatch((Array.isArray(lines) ? lines : []).filter(wakeLineKept), { owner: ownerOfLine, defaultSeat: defaultIssueSeat(process.env) });
   for (const s of skips) recordSkip(s.seat, s.line, s.reason);
   const now = Date.now();
@@ -527,7 +577,11 @@ function offerLines(lines) {
     if (!seat || !SEAT_WEBHOOKS[seat]) continue;
     if (cfg.paused) { recordSkip(seat, w.line, 'paused'); continue; }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
-    if (d.op === 'skip') { recordSkip(seat, d.line, d.reason); continue; }
+    if (d.op === 'skip') {
+      recordSkip(seat, d.line, d.reason);
+      if (d.needsHuman) flagBreaker(d.line, now);
+      continue;
+    }
     if (d.op === 'queue') {
       wakeState.hold.push({ seat, line: d.line, until: d.until });
       armHold(d.until);
@@ -558,9 +612,9 @@ function armWake(seat) {
   st.timer = t;
 }
 function pumpHold(now = Date.now()) {
-  const cfg = wakeConfig(process.env);
+  const cfg = wakeCfg();
   const { due, skips } = releaseDue(wakeState, now, cfg);
-  for (const s of skips) recordSkip(s.seat, s.line, s.reason);
+  for (const s of skips) { recordSkip(s.seat, s.line, s.reason); if (s.needsHuman) flagBreaker(s.line, now); }
   for (const d of due) enqueuePending(d.seat, d.line);
   let next = 0;
   for (const item of wakeState.hold) if (!next || item.until < next) next = item.until;
