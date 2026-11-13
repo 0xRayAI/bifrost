@@ -176,7 +176,7 @@ test('the first L3 still lands while the backlog is open', async () => {
   }
 });
 
-test('an existing L3 repeats once the arch1 backlog is clear', async () => {
+test('a later L3 updates the one record and does not append an inbox line', async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-backlog-'));
   const secret = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
@@ -188,7 +188,13 @@ test('an existing L3 repeats once the arch1 backlog is clear', async () => {
     await ingest(srv.base, secret, beat);
     const stats = await feedStats(srv.base);
     assert.equal(stats.arch1_backlog, 0);
-    assert.equal(openL3(data).length, 2, srv.logs());
+    const rows = openL3(data);
+    assert.equal(rows.length, 1, srv.logs());
+    assert.equal(rows[0].id, `nudge:${KEY}:L3:${beat}:1`);
+    assert.ok(rows[0].t > now - 5000);
+    const forge = path.join(data, 'live', 'inbox', 'forge.jsonl');
+    const text = fs.existsSync(forge) ? fs.readFileSync(forge, 'utf8') : '';
+    assert.equal(text.includes(`L3:${beat}`), false);
   } finally {
     await stop(srv.child);
     fs.rmSync(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });

@@ -2,10 +2,11 @@
 
 ## Unreleased
 
+- One nudge record per card. A later L3 updates that record and does not add an inbox line or wake the seat again. `POST /inbox/<seat>/postpone` keeps the line off the queue head until the card reaches a later phase. The board sweep acks a previous-day station line, a nudge whose card is closed, and a comment on a closed issue or pull. `--upto` still acks a prefix the seat names. The station id is the Chicago date. Shed age at or past `BIFROST_SHED_TTL_S` is acked, and that TTL caps at 7 days.
 - Packet R files that seat, including the opener, once inside 48 hours. A dead assignee token stops writes for this process and does not finish the 14-day walk. The open-card refill does not replay routes a seeded volume already refused. The assignee latch remembers every 4xx except 401, treats 401 as a dead token for the process, and leaves a network miss unremembered. The server mints the assignee token and redacts it on collector logs.
 - The manual says `GET /archive` takes the `ARCHIVE_KEY` bearer, `GET /fleet-mode` is open, and `POST /fleet-mode` takes the ingest secret or the blinky seat key. `stalled` follows the accepted clock. `unreadable_repos` lists names, masked only when the site is gated. The card does not store gates. Rollback stays `house/live/app/rollback.sh` on the xray tree.
 - A quiet pass writes a clock file and leaves the event document in place. The clock file omits the board. A clock file over 2 MiB still moves the health clock and is not parsed. `card_age` is reported and does not change `ok`.
-- A shed inbox row whose card is already closed or merged is acked. A still-open shed row is unshed back into the queue, keeping its original time. Shed rows older than `BIFROST_SHED_TTL_S` (default 24h) are acked. The sweep runs at boot and on the governor tick. #69
+- A shed inbox row whose card is already closed or merged is acked. A still-open shed row is unshed back into the queue, keeping its original time. Shed rows at or older than `BIFROST_SHED_TTL_S` (default 24h, capped at 7 days) are acked. The sweep runs at boot and on the governor tick. #69
 - A line marked shed is never the live head, including the rank-2 fallback. A ready handoff still leads a same-card tip. xray#823
 - An unassigned issue wakes arch1 when forge is dark, and forge otherwise. xray#815
 - A newer merge tip on the same pull is the live head. An older tip on that pull does not stay in front. A ready handoff still leads. xray#813 bifrost#39

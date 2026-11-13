@@ -36,7 +36,7 @@ import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundar
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck, idsToAckOnClose } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
-import { liveLine, backlogOf, nudgeTargets, markShed, settleShed, shedTtlMs } from './inbox-queue.mjs';
+import { liveLine, backlogOf, nudgeTargets, markShed, settleShed, shedTtlMs, staleSweepIds, stillPostponed } from './inbox-queue.mjs';
 const CI_NODES = loadCiNodes();
 const batch = createBatch();
 
@@ -949,6 +949,17 @@ function readyAfterFix(seat, line) {
   });
   return !passed;
 }
+function postponeLine(seat, id, phase) {
+  const arr = seatInbox[seat] || [];
+  const line = arr.find((l) => l.id === id);
+  if (!line) return -1;
+  const name = String(phase || '').toLowerCase();
+  if (!['review', 'fix', 'merge', 'retest'].includes(name)) return -2;
+  if (!stillPostponed({ ...line, postpone_phase: name }, lineCard(line))) return -2;
+  line.postpone_phase = name;
+  saveSeatInbox(seat);
+  return 1;
+}
 function passLines(seat, id) {
   const arr = seatInbox[seat] || [];
   if (!arr.some(l => l.id === id)) return -1;
@@ -1046,6 +1057,19 @@ function saveSeatInbox(s) {
   bfWrite('inbox/' + s + '.jsonl', seatInbox[s].map(l => JSON.stringify(l)).join('\n') + '\n');
 }
 const SHED_TTL_MS = shedTtlMs(process.env);
+function sweepStale(seat, now) {
+  const arr = seatInbox[seat];
+  if (!Array.isArray(arr) || !arr.length) return 0;
+  const acked = ackedSet(seat);
+  const open = arr.filter((line) => line && !acked.has(line.id));
+  const ids = staleSweepIds(open, { today: chicagoDay(now), isSettled: settledLine });
+  let n = 0;
+  for (const id of ids) {
+    const r = ackLines(seat, id);
+    if (r > 0) n += r;
+  }
+  return n;
+}
 function sweepShed(now = Date.now()) {
   let changed = false;
   for (const seat of SEAT_IDS) {
@@ -1053,7 +1077,8 @@ function sweepShed(now = Date.now()) {
     if (!Array.isArray(arr) || !arr.length) continue;
     const acked = ackedSet(seat);
     const result = settleShed(arr, { now, ttlMs: SHED_TTL_MS, isSettled: settledLine, skip: (line) => acked.has(line.id) });
-    if (!result.settled.length && !result.unshed.length) continue;
+    const stale = sweepStale(seat, now);
+    if (!result.settled.length && !result.unshed.length && !stale) continue;
     seatInbox[seat] = result.lines;
     for (const line of result.settled) ackLines(seat, line.id);
     saveSeatInbox(seat);
@@ -1209,6 +1234,11 @@ function takeBatch(lines) {
   }
   return kept;
 }
+function sameStationDay(seat, line) {
+  const hit = /^nudge:station:([a-z0-9-]{2,16}):(\d{4}-\d{2}-\d{2})$/.exec(String(line && line.id || ''));
+  if (!hit || canonSeat(hit[1]) !== seat) return false;
+  return String(line.kind || '').toLowerCase() === 'station';
+}
 function postSeatLines(parsed, onlySeat) {
   const incoming = parsed && Array.isArray(parsed.lines) ? parsed.lines : null;
   if (!incoming || incoming.length > 5000) return { status: 400, error: 'lines required' };
@@ -1237,6 +1267,13 @@ function postSeatLines(parsed, onlySeat) {
     if (!arr) continue;
     const dup = arr.find(x => x.id === l.id);
     if (dup) {
+      if (sameStationDay(s, l)) {
+        dup.t_ct = l.t_ct || ctStamp(Date.now());
+        if (typeof l.title === 'string') dup.title = l.title;
+        if (typeof l.reason === 'string') dup.reason = l.reason;
+        touched.add(s);
+        continue;
+      }
       if (readyAfterFix(s, l)) {
         unackLine(s, l.id);
         dup.t_ct = l.t_ct || ctStamp(Date.now());
@@ -1641,8 +1678,19 @@ function applyStartAfter(now = Date.now()) {
   if (changed) saveStartAfter();
   return changed;
 }
-// NUDGE: a live card with no beat for 60 min -> level 1 to the packet's next owner (else the card owner); still no
-// The card nudge is an inbox line for that seat, so the webhook fires. It does not open an L2 record and it does not wake the CoS seat to reassign. Level 3 then repeats to that same owner every 2h.
+// NUDGE: a live card with no beat for 60 min sends L1 to the packet next owner, else the card owner.
+// L1 is the one inbox line and the one webhook. A later L3 updates that record and that line. It does not append and it does not webhook again.
+function retouchNudge(n) {
+  const seat = canonSeat(n && n.seat);
+  const arr = seat && seatInbox[seat];
+  if (!arr) return;
+  const l1 = `nudge:${n.card}:L1:${n.beat_t}`;
+  const line = arr.find((x) => x.id === l1 || x.id === n.id);
+  if (!line) return;
+  line.reason = `nudge L${n.level} (${n.via || 'nudge'})`.slice(0, 200);
+  line.t_ct = n.t_ct || line.t_ct;
+  saveSeatInbox(seat);
+}
 // Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no nudge.
 function evalNudges(now = Date.now()) {
   let changed = applyStartAfter(now); const byKey = new Map(bfCards.map(c => [c.key, c]));
@@ -1697,8 +1745,18 @@ function evalNudges(now = Date.now()) {
     if (l1 && !l1.closed_at && now - l1.t >= NUDGE_L2_MS + NUDGE_L3_MS) {
       const reps = nudges.filter(n => n.card === c.key && n.level === 3 && n.beat_t === c.last_beat_t && !n.closed_at);
       const prev = reps.length ? reps[reps.length - 1].t : l1.t + NUDGE_L2_MS;
-      if (arch1InboxDepth().backlog > 0 && reps.length >= 1) continue;
-      if (now - prev >= NUDGE_L3_MS) mk(3, tgt, 'repeat', `nudge:${c.key}:L3:${c.last_beat_t}:${reps.length + 1}`);
+      if (now - prev >= NUDGE_L3_MS) {
+        const row = reps[reps.length - 1];
+        if (row) {
+          row.t = now; row.t_ct = ctStamp(now); row.via = 'repeat'; changed = true;
+          retouchNudge(row);
+        } else if (wakeAllowed(fleetMode.mode, c)) {
+          const made = { id: `nudge:${c.key}:L3:${c.last_beat_t}`, t: now, t_ct: ctStamp(now), card: c.key, repo: c.repo || '', number: c.number || 0,
+            title: String(c.title || '').slice(0, 120), url: String(c.url || '').slice(0, 300), stage: c.stage || '', level: 3, seat: tgt, via: 'repeat', beat_t: c.last_beat_t };
+          nudges.push(made); changed = true;
+          retouchNudge(made);
+        }
+      }
     }
   }
   if (nudgeLines(now)) changed = true;
@@ -1788,14 +1846,13 @@ function evalHandoffs(now) {
     }
     const l2 = nudges.find(n => n.id === l2id && !n.closed_at);
     if (l2 && now - l2.t >= NUDGE_L3_MS) {
-      const reps = nudges.filter(n => n.kind === 'handoff' && n.level === 3 && n.card === ob.key && n.sha === ob.sha && !n.closed_at);
-      const prev = reps.length ? reps[reps.length - 1].t : l2.t;
-      if (now - prev >= NUDGE_L3_MS) {
-        const id = `${base}:L3:${reps.length + 1}`;
-        if (!nudges.some(n => n.id === id)) {
-          nudges.push({ ...l2, id, t: now, t_ct: ctStamp(now), level: 3, seat: ob.owes, via: 'repeat' });
-          changed = true;
-        }
+      const id = `${base}:L3`;
+      const row = nudges.find(n => n.id === id && !n.closed_at);
+      if (!row) {
+        nudges.push({ ...l2, id, t: now, t_ct: ctStamp(now), level: 3, seat: ob.owes, via: 'repeat' });
+        changed = true;
+      } else if (now - row.t >= NUDGE_L3_MS) {
+        row.t = now; row.t_ct = ctStamp(now); changed = true;
       }
     }
   }
@@ -1803,7 +1860,7 @@ function evalHandoffs(now) {
     if (n.closed_at) continue;
     const handoff = n.kind === 'handoff' || (n.kind === 'reassign' && String(n.id || '').includes(':handoff:'));
     if (!handoff) continue;
-    const base = String(n.id).replace(/:L3cos$/, '').replace(/:L3:\d+$/, '').replace(/:L2$/, '');
+    const base = String(n.id).replace(/:L3cos$/, '').replace(/:L3:\d+$/, '').replace(/:L3$/, '').replace(/:L2$/, '');
     if (!open.has(base)) { n.closed_at = new Date(now).toISOString(); changed = true; }
   }
   return changed;
@@ -4002,7 +4059,7 @@ async function handle(req, res) {
     if (sender !== 'ingest') {
       const lines = parsed && Array.isArray(parsed.lines) ? parsed.lines : [];
       const handoffId = /^handoff:([a-z0-9_.-]+\/[a-z0-9_.-]+)#([1-9]\d{0,6}):(ready|critic_fail|live_pass|merge|ci_fail):([0-9a-f]{7,64})$/;
-      const stationId = /^nudge:station:([a-z0-9-]{2,16}):(\d{4}-\d{2}-\d{2}T\d{2})$/;
+      const stationId = /^nudge:station:([a-z0-9-]{2,16}):(\d{4}-\d{2}-\d{2})(?:T\d{2})?$/;
       const stationSentence = 'Run station and re-read OP-PROC';
       const ownHandoff = (line) => {
         if (!line || typeof line !== 'object' || Array.isArray(line)) return false;
@@ -4109,6 +4166,22 @@ async function handle(req, res) {
     if (n < 0) return json(req, res, 404, { error: 'no such line' });
     if (n > 0) publishHeader();
     return json(req, res, 200, { ok: true, passed: n, open: seatOpenRows(who, false).length });
+  }
+  const postM = /^\/inbox\/([a-z0-9-]{2,16})\/postpone$/.exec(p);
+  if (postM) {   // POST /inbox/<seat>/postpone {"id","phase"}: keep the line, drop it from the queue head until the card reaches that phase. Not an ack.
+    if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
+    let who; try { who = await seatOf(req); } catch { return json(req, res, 503, { error: 'could not verify token, retry' }, { 'Retry-After': '30' }); }
+    if (!who) { req.resume(); return json(req, res, 401, { error: 'unauthorized' }); }
+    if (!SEAT_IDS.includes(postM[1]) || who !== postM[1]) { req.resume(); return json(req, res, 403, { error: 'not your inbox' }); }
+    let d; try { d = JSON.parse((await readBody(req, 4096)).toString('utf8')); } catch { return json(req, res, 400, { error: 'invalid json' }); }
+    const id = d && typeof d.id === 'string' && d.id.length <= 300 ? d.id : '';
+    const phase = d && typeof d.phase === 'string' ? d.phase : '';
+    if (!id) return json(req, res, 400, { error: 'id required' });
+    const n = postponeLine(who, id, phase); touchSeat(who);
+    if (n === -1) return json(req, res, 404, { error: 'no such line' });
+    if (n < 0) return json(req, res, 400, { error: 'phase must be a later kanban phase' });
+    if (n > 0) publishHeader();
+    return json(req, res, 200, { ok: true, postponed: n, open: seatOpenRows(who, false).length });
   }
   if (p === '/routing') {   // GET /routing: the routing map, read-only (seat, login, aliases, status). No keys, no webhook URLs.
     if (m !== 'GET') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET' });

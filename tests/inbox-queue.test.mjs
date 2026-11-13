@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { backlogOf, keepStation, lineRank, liveLine, markShed, nudgeTargets, overWip, queueView, rSeat, settleShed, shedTtlMs } from '../inbox-queue.mjs';
+import { backlogOf, keepStation, lineRank, liveLine, markShed, nudgeTargets, overWip, queueView, rSeat, settleShed, shedTtlMs, staleSweepIds, stillPostponed } from '../inbox-queue.mjs';
 
 const line = (id, extra) => ({ id, t_ct: extra.t || '2026-10-30T10:00:00Z', type: 'issue_comment', repo: '0xRayAI/xray', number: 1, title: id, url: '', reason: 'ask', ...extra });
 
@@ -295,6 +295,48 @@ test('a shed row at or past the TTL is settled, a younger one is unshed (pinned 
   assert.equal(shedTtlMs({}), 86400000);
   assert.equal(shedTtlMs({ BIFROST_SHED_TTL_S: '3600' }), 3600000);
   assert.equal(shedTtlMs({ BIFROST_SHED_TTL_S: '0' }), 86400000);
+  assert.equal(shedTtlMs({ BIFROST_SHED_TTL_S: String(8 * 86400) }), 7 * 86400000);
+});
+
+test('a shed row at the 7-day cap is acked and a younger open row is unshed (#71)', () => {
+  const now = Date.parse('2026-11-10T12:00:00Z');
+  const ttlMs = 7 * 86400000;
+  const atCap = line('at', { number: 1, shed: true, t: new Date(now - ttlMs).toISOString() });
+  const younger = line('young', { number: 2, shed: true, t: new Date(now - ttlMs + 1000).toISOString() });
+  const result = settleShed([atCap, younger], { now, ttlMs, isSettled: () => false });
+  assert.deepEqual(result.settled.map((row) => row.id), ['at']);
+  assert.deepEqual(result.unshed.map((row) => row.id), ['young']);
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs'), 'utf8');
+  assert.match(src, /Date\.parse\(l\.t_ct\) < cut/);
+});
+
+test('postpone drops the row until the card stage arrives and does not block station', () => {
+  const ask = line('issue:741', { type: 'issue_open', number: 741, t: '2026-11-13T02:00:00Z', postpone_phase: 'fix' });
+  const nudge = line('nudge:741', { type: 'nudge', number: 741, t: '2026-11-12T00:00:00Z', postpone_phase: 'fix' });
+  const station = line('nudge:station:arch1:2026-11-13', { type: 'nudge', kind: 'station', repo: '', number: 0, t: '2026-11-13T15:00:00Z' });
+  const openCard = { stage: 'open', title: 'fleet' };
+  const fixCard = { stage: 'fix', title: 'fleet' };
+  const opts = (card) => ({ cardOf: (row) => Number(row.number) === 741 ? card : null });
+  assert.equal(stillPostponed(ask, openCard), true);
+  assert.equal(stillPostponed(ask, fixCard), false);
+  assert.equal(ask.shed, undefined);
+  assert.deepEqual(queueView([ask, nudge, station], opts(openCard)).map((row) => row.id), [station.id]);
+  assert.deepEqual(queueView([ask], opts(fixCard)).map((row) => row.id), [ask.id]);
+});
+
+test('the sweep acks the stale prefix and leaves the surviving open row', () => {
+  const oldStation = line('nudge:station:arch1:2026-11-12', { type: 'nudge', kind: 'station', repo: '', number: 0, t: '2026-11-12T15:00:00Z' });
+  const todayStation = line('nudge:station:arch1:2026-11-13', { type: 'nudge', kind: 'station', repo: '', number: 0, t: '2026-11-13T15:00:00Z' });
+  const closedComment = line('c399', { type: 'issue_comment', number: 399, t: '2026-11-10T00:00:00Z' });
+  const openComment = line('c741', { type: 'issue_comment', number: 741, t: '2026-11-13T00:00:00Z' });
+  const extra = line('nudge:0xrayai/xray#741:L3:1', { type: 'nudge', number: 741, t: '2026-11-13T01:00:00Z' });
+  const issue = line('issue:741', { type: 'issue_open', number: 741, t: '2026-11-13T02:00:00Z' });
+  const lone = line('nudge:0xrayai/xray#560:L3:1', { type: 'nudge', number: 560, t: '2026-11-13T03:00:00Z' });
+  const ids = staleSweepIds([oldStation, todayStation, closedComment, openComment, extra, issue, lone], {
+    today: '2026-11-13',
+    isSettled: (row) => row.number === 399,
+  });
+  assert.deepEqual(ids.sort(), ['c399', 'nudge:0xrayai/xray#741:L3:1', 'nudge:station:arch1:2026-11-12'].sort());
 });
 
 test("queueOpts('arch1') includes shedCards at the markShed guard (#69)", () => {

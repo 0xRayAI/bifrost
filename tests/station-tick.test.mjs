@@ -38,7 +38,7 @@ test('a due hour names one station line per seat and the same hour is quiet', ()
   assert.equal(due.hour, HOUR);
   assert.deepEqual(due.lines.map((line) => line.seat), ['forge', 'critic', 'blinky', 'arch1']);
   for (const line of due.lines) {
-    assert.equal(line.id, `nudge:station:${line.seat}:${HOUR}`);
+    assert.equal(line.id, `nudge:station:${line.seat}:${HOUR.slice(0, 10)}`);
     assert.equal(line.type, 'nudge');
     assert.equal(line.kind, 'station');
     assert.equal(line.title, STATION_SENTENCE);
@@ -46,6 +46,9 @@ test('a due hour names one station line per seat and the same hour is quiet', ()
   }
   assert.equal(stationDue(OPEN, due.hour, IDS), null);
   assert.equal(stationDue('2026-10-26T18:00:00-05:00', '', IDS), null);
+  const later = stationDue('2026-10-26T08:30:00-05:00', due.hour, IDS);
+  assert.equal(later.hour, '2026-10-26T08');
+  assert.equal(later.lines[0].id, due.lines[0].id);
 });
 
 function start(data, extra = {}) {
@@ -158,9 +161,9 @@ test('a busy weekday half hour still stores the station line', async () => {
     for (const seat of seats) {
       const ids = storedIds(data, seat);
       assert.equal(ids.includes(`open:${seat}`), true, seat);
-      assert.equal(ids.includes(`nudge:station:${seat}:${busy.hour}`), true, seat);
+      assert.equal(ids.includes(`nudge:station:${seat}:${busy.hour.slice(0, 10)}`), true, seat);
     }
-    assert.deepEqual(storedIds(data, 'arch1'), [`nudge:station:arch1:${busy.hour}`]);
+    assert.deepEqual(storedIds(data, 'arch1'), [`nudge:station:arch1:${busy.hour.slice(0, 10)}`]);
     assert.equal(storedIds(data, 'herald').some((id) => id.startsWith('nudge:station:')), false);
     const seen = await (await fetch(srv.base + '/inbox/forge?queue=1', {
       headers: { Authorization: 'Bearer ' + raw.forge },
@@ -169,7 +172,7 @@ test('a busy weekday half hour still stores the station line', async () => {
     const all = await (await fetch(srv.base + '/inbox/forge?all=1', {
       headers: { Authorization: 'Bearer ' + raw.forge },
     })).json();
-    assert.equal((all.lines || []).some((line) => line.id === `nudge:station:forge:${busy.hour}` && line.reason === STATION_SENTENCE), true);
+    assert.equal((all.lines || []).some((line) => line.id === `nudge:station:forge:${busy.hour.slice(0, 10)}` && line.reason === STATION_SENTENCE), true);
   } finally {
     await stop(srv.child);
     fs.rmSync(data, { recursive: true, force: true });
@@ -195,5 +198,100 @@ test('before the half hour and on a test bind the tick stays quiet', async () =>
   } finally {
     await stop(quietSrv.child);
     fs.rmSync(quiet, { recursive: true, force: true });
+  }
+});
+
+test('a later hour the same Chicago day updates the one station row', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'station-day-'));
+  const busy = recentBusyHour();
+  const later = new Date(Date.parse(busy.now) + 60 * 60 * 1000).toISOString();
+  const date = busy.hour.slice(0, 10);
+  const id = `nudge:station:forge:${date}`;
+  const dir = path.join(data, 'live', 'inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const seeded = {
+    id, t_ct: '1999-01-01T00:00:00.000Z', seat: 'forge', from: 'forge', to: 'forge',
+    type: 'nudge', kind: 'station', repo: '', number: 0,
+    title: STATION_SENTENCE, url: '', reason: STATION_SENTENCE,
+  };
+  fs.writeFileSync(path.join(dir, 'forge.jsonl'), JSON.stringify(seeded) + '\n');
+  const srv = start(data, { STATION_NUDGE: 'on', STATION_NOW: later });
+  try {
+    await srv.ready;
+    const file = path.join(dir, 'forge.jsonl');
+    const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((row) => JSON.parse(row));
+    const station = rows.filter((row) => row.id === id);
+    assert.equal(station.length, 1);
+    assert.notEqual(station[0].t_ct, seeded.t_ct);
+  } finally {
+    await stop(srv.child);
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+function seatKey() {
+  const raw = 'arch1-key-' + crypto.randomBytes(6).toString('hex');
+  const keys = { arch1: crypto.createHash('sha256').update(raw).digest('hex') };
+  return { raw, keys };
+}
+
+test('boot sweep acks a previous-day station line and leaves the open ask', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'station-sweep-'));
+  const { raw, keys } = seatKey();
+  const dir = path.join(data, 'live', 'inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = [
+    {
+      id: 'nudge:station:arch1:2026-11-01', t_ct: new Date().toISOString(), seat: 'arch1', from: 'arch1', to: 'arch1',
+      type: 'nudge', kind: 'station', repo: '', number: 0, title: STATION_SENTENCE, url: '', reason: STATION_SENTENCE,
+    },
+    {
+      id: 'issue:741', t_ct: new Date().toISOString(), seat: 'arch1', type: 'issue_open',
+      repo: '0xRayAI/xray', number: 741, title: 'fleet news', url: '', reason: 'open',
+    },
+  ];
+  fs.writeFileSync(path.join(dir, 'arch1.jsonl'), lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+  const srv = start(data, { SEAT_KEYS: JSON.stringify(keys) });
+  try {
+    await srv.ready;
+    const seen = await (await fetch(srv.base + '/inbox/arch1?queue=1', {
+      headers: { Authorization: 'Bearer ' + raw },
+    })).json();
+    assert.deepEqual((seen.lines || []).map((line) => line.id), ['issue:741']);
+  } finally {
+    await stop(srv.child);
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test('postpone keeps the line and takes it off the queue head', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'station-postpone-'));
+  const { raw, keys } = seatKey();
+  const dir = path.join(data, 'live', 'inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const line = {
+    id: 'issue:741', t_ct: new Date().toISOString(), seat: 'arch1', type: 'issue_open',
+    repo: '0xRayAI/xray', number: 741, title: 'fleet news', url: '', reason: 'open',
+  };
+  fs.writeFileSync(path.join(dir, 'arch1.jsonl'), JSON.stringify(line) + '\n');
+  const srv = start(data, { SEAT_KEYS: JSON.stringify(keys) });
+  const auth = { Authorization: 'Bearer ' + raw, 'Content-Type': 'application/json' };
+  try {
+    await srv.ready;
+    const bad = await fetch(srv.base + '/inbox/arch1/postpone', {
+      method: 'POST', headers: auth, body: JSON.stringify({ id: 'issue:741', phase: 'done' }),
+    });
+    assert.equal(bad.status, 400);
+    const ok = await fetch(srv.base + '/inbox/arch1/postpone', {
+      method: 'POST', headers: auth, body: JSON.stringify({ id: 'issue:741', phase: 'fix' }),
+    });
+    assert.equal(ok.status, 200, await ok.clone().text());
+    const head = await (await fetch(srv.base + '/inbox/arch1?queue=1', { headers: auth })).json();
+    assert.deepEqual((head.lines || []).map((row) => row.id), []);
+    const all = await (await fetch(srv.base + '/inbox/arch1?all=1', { headers: auth })).json();
+    assert.equal((all.lines || []).some((row) => row.id === 'issue:741' && row.postpone_phase === 'fix'), true);
+  } finally {
+    await stop(srv.child);
+    fs.rmSync(data, { recursive: true, force: true });
   }
 });
