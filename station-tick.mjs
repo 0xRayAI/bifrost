@@ -33,11 +33,17 @@ export function stationSeats(ids) {
   return seats;
 }
 
+function stationDate(hour) {
+  const hit = /^(\d{4}-\d{2}-\d{2})T\d{2}$/.exec(String(hour || ''));
+  return hit ? hit[1] : '';
+}
+
 export function stationLines(hour, seats, now) {
   const when = now instanceof Date ? now : new Date(now || Date.now());
   const t = Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString();
+  const date = stationDate(hour);
   return (seats || []).map((seat) => ({
-    id: `nudge:station:${seat}:${hour}`,
+    id: `nudge:station:${seat}:${date}`,
     t_ct: t,
     seat,
     from: seat,

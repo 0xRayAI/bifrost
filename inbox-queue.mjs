@@ -82,6 +82,15 @@ function byMotion(a, b) {
 }
 
 const TIP_TYPES = new Set(['issue_comment', 'pr_comment', 'review', 'review_comment', 'comment']);
+const PHASES = ['open', 'review', 'fix', 'merge', 'retest', 'done'];
+
+/** True while postpone_phase is still later than the card stage. The flag stays on the line. */
+export function stillPostponed(line, card) {
+  const want = PHASES.indexOf(String(line && line.postpone_phase || '').toLowerCase());
+  if (want < 1) return false;
+  const have = PHASES.indexOf(String(card && card.stage || 'open').toLowerCase());
+  return want > (have < 0 ? 0 : have);
+}
 
 function cardKey(line) {
   const repo = String(line && line.repo || '').toLowerCase();
@@ -212,7 +221,9 @@ function preferNewestTip(rows) {
 export function queueView(lines, opts = {}) {
   const wip = Number.isInteger(opts.wip) ? opts.wip : WAKE_WIP;
   const seat = String(opts.seat || '');
-  const rows = shedOlderTips(shedOlderHeads(preferNewestTip(ranked(lines, opts)))).filter((row) => !row.line || row.line.shed !== true);
+  const cardOf = typeof opts.cardOf === 'function' ? opts.cardOf : () => null;
+  const visible = (Array.isArray(lines) ? lines : []).filter((line) => line && !stillPostponed(line, cardOf(line)));
+  const rows = shedOlderTips(shedOlderHeads(preferNewestTip(ranked(visible, opts)))).filter((row) => !row.line || row.line.shed !== true);
   const ready = pick(rows, 0);
   const priority = rows.filter((row) => row.rank === 1 && row.priority).sort(seat ? byMotion : byAge).map((row) => row.line);
   const rest = rows.filter((row) => row.rank === 1 && !row.priority && !row.line.shed).sort(newestFirst).slice(0, opts.nudge ? 0 : wip).map((row) => row.line);
@@ -260,9 +271,49 @@ export function nudgeTargets(lines, opts = {}) {
   });
 }
 
+const SHED_CAP_S = 7 * 86400;
+
 export function shedTtlMs(env = process.env) {
   const n = Number(env && env.BIFROST_SHED_TTL_S);
-  return (Number.isFinite(n) && n > 0 ? n : 86400) * 1000;
+  const sec = Number.isFinite(n) && n > 0 ? n : 86400;
+  return Math.min(sec, SHED_CAP_S) * 1000;
+}
+
+/** Chicago date on a station id, including the older hour form. Empty for any other line. */
+export function stationDay(line) {
+  if (String(line && line.kind || '').toLowerCase() !== 'station') return '';
+  const hit = /^nudge:station:[a-z0-9-]{2,16}:(\d{4}-\d{2}-\d{2})(?:T\d{2})?$/.exec(String(line && line.id || ''));
+  return hit ? hit[1] : '';
+}
+
+/** Ids the board sweep acks. A surviving open row stays. This is not a prefix ack. */
+export function staleSweepIds(lines, opts = {}) {
+  const today = String(opts.today || '');
+  const isSettled = typeof opts.isSettled === 'function' ? opts.isSettled : () => false;
+  const rows = (Array.isArray(lines) ? lines : []).filter(Boolean);
+  const ack = new Set();
+  const byCard = new Map();
+  for (const line of rows) {
+    const day = stationDay(line);
+    if (day && today && day < today) { ack.add(line.id); continue; }
+    const type = String(line.type || '').toLowerCase();
+    const kind = String(line.kind || '').toLowerCase();
+    if (type === 'nudge' && kind !== 'station' && isSettled(line)) { ack.add(line.id); continue; }
+    if (TIP_TYPES.has(type) && isSettled(line)) { ack.add(line.id); continue; }
+    const key = cardKey(line);
+    if (!key) continue;
+    if (!byCard.has(key)) byCard.set(key, []);
+    byCard.get(key).push(line);
+  }
+  for (const group of byCard.values()) {
+    const live = group.filter((line) => !ack.has(line.id));
+    const nudges = live.filter((line) => String(line.type || '').toLowerCase() === 'nudge');
+    const rest = live.filter((line) => String(line.type || '').toLowerCase() !== 'nudge');
+    if (rest.length && nudges.length) {
+      for (const row of nudges) ack.add(row.id);
+    }
+  }
+  return [...ack];
 }
 
 /** Closed or aged shed rows are listed as settled (the caller acks). Still-open targets are unshed, keeping t_ct, so they rejoin the normal queue. */
