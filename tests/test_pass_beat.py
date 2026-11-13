@@ -32,10 +32,11 @@ class PassBeatTest(unittest.TestCase):
             out = Path(tmp) / "github-events.json"
             out.write_text("{}\n", encoding="utf-8")
             prior = Path(tmp) / "github-events.beat.json"
-            prior.write_text(json.dumps({"generated_at": "old", "repos_unreadable": ["a/b"], "events": [1], "board": {}}) + "\n", encoding="utf-8")
+            prior.write_text(json.dumps({"generated_at": "old", "repos_unreadable": ["a/b"], "board_sig": "abc", "events": [1], "board": {}}) + "\n", encoding="utf-8")
             live_mesh.touch_pass_beat(out)
             got = json.loads(prior.read_text(encoding="utf-8"))
             self.assertEqual(got["repos_unreadable"], ["a/b"])
+            self.assertEqual(got["board_sig"], "abc")
             self.assertNotIn("events", got)
             self.assertNotIn("board", got)
             self.assertNotEqual(got["generated_at"], "old")

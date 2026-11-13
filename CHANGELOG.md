@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A quiet pass still leaves the event document in place when the board signature matches. A card change with the same events rewrites the document, then writes a beat that carries `board_sig` and no board body. `updated_ct` and `closed_t` do not force that rewrite.
 - The stall clock moves on a board event or an ack. CI, deploys, health, X, and seat presence do not reset it. A still board wakes once and waits for the next move. A nudge line is that wake. `POST /clock` starts the same run, including an empty board. Weekly burn still keeps the empty wake quiet.
 - The collector writes the watchdog beat at the start of a pass, and the stall window defaults to 270 seconds. A pass of about two minutes is no longer inside ten seconds of the kill. #65
 - One nudge record per card. A later L3 updates that record and does not add an inbox line or wake the seat again. `POST /inbox/<seat>/postpone` keeps the line off the queue head until the card reaches a later phase. The board sweep acks a previous-day station line, a nudge whose card is closed, and a comment on a closed issue or pull. `--upto` still acks a prefix the seat names. The station id is the Chicago date. Shed age at or past `BIFROST_SHED_TTL_S` is acked, and that TTL caps at 7 days.

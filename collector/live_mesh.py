@@ -341,10 +341,51 @@ def write(feed, out):
     return n
 
 
-def _write_beat(feed, out):
+def _card_rows(rows):
+    """Card signature fields. closed_t is stamped again on every reconcile pass."""
+    out = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            out.append({k: v for k, v in row.items() if k != "closed_t"})
+        else:
+            out.append(row)
+    return out
+
+
+def board_sig(board):
+    """Hash of the board the server keeps. updated_ct changes every pass and stays out."""
+    board = board if isinstance(board, dict) else {}
+    body = {
+        "cards": _card_rows(board.get("cards")),
+        "settled": _card_rows(board.get("settled")),
+        "transitions": board.get("transitions") or [],
+        "stats": board.get("stats") or {},
+    }
+    raw = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+
+def recorded_board_sig(out):
+    path = Path(out).with_suffix(".beat.json")
+    try:
+        if not path.exists():
+            return None
+        st = path.stat()
+        if st.st_size <= 0 or st.st_size > 2 * 1024 * 1024:
+            return None
+        old = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
+    sig = old.get("board_sig") if isinstance(old, dict) else None
+    return sig if isinstance(sig, str) and sig else None
+
+
+def _write_beat(feed, out, sig=None):
     """Clock and header only. The board stays on the event document.
     A quiet pass must not rewrite that document, and this file stays small enough to read."""
     header = {k: v for k, v in feed.items() if k not in ("events", "board")}
+    if sig:
+        header["board_sig"] = sig
     path = out.with_suffix(".beat.json")
     tmp = path.with_suffix(f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -368,9 +409,10 @@ def _write(feed, out):
     payload["event_count"] = len(events)
     if MODE == "github":
         payload["notes"] = window_note(payload.get("notes"), events)
-    # Railway collector: same events leave the document bytes in place. The beat still moves the clock.
-    if MODE == "github" and out.exists() and keyset == seen:
-        _write_beat(payload, out)
+    # Same events and the same board leave the document bytes in place. The beat still moves the clock.
+    sig = board_sig(feed.get("board")) if MODE == "github" else None
+    if MODE == "github" and out.exists() and keyset == seen and recorded_board_sig(out) == sig:
+        _write_beat(payload, out, sig)
         return 0
     tmp = out.with_suffix(f".json.tmp.{os.getpid()}")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -378,7 +420,7 @@ def _write(feed, out):
     if MODE == "github":                # no append-only archive; the content hashes persist on the volume
         tmp = seen_path.with_suffix(f".tmp.{os.getpid()}")
         tmp.write_text(json.dumps(sorted(keyset))); os.replace(tmp, seen_path)
-        _write_beat(payload, out)
+        _write_beat(payload, out, sig)
         return len(new)
     if new:
         with stream.open("a") as f:
