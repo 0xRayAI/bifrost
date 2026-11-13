@@ -5,7 +5,7 @@ import { createClock, runChoice, stallMove } from '../governor.mjs';
 const tripMs = 30 * 60000;
 
 test('stall noise does not move the clock', () => {
-  for (const kind of ['check_run', 'check_suite', 'workflow_run', 'ci_pass', 'ci_fail', 'pr_commit', 'health_ok', 'health_fail', 'deploy', 'deploy_fail', 'probe', 'feed_push', 'x_out_root', 'seat_turn', 'seat_prompt']) {
+  for (const kind of ['check_run', 'check_suite', 'workflow_run', 'ci_pass', 'ci_fail', 'pr_commit', 'commit_status', 'health_ok', 'health_fail', 'deploy', 'deploy_fail', 'deploy_pending', 'op_deploy', 'probe', 'feed_push', 'x_out_root', 'seat_turn', 'seat_prompt']) {
     assert.equal(stallMove({ id: kind, kind }), false, kind);
   }
   assert.equal(stallMove({ id: 'c', kind: 'issue_comment' }), true);

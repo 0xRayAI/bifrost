@@ -2901,7 +2901,7 @@ function feedQuiet(now = Date.now()) {
   return now - at > ms;
 }
 function watchLimitMs() {
-  // A healthy pass is about two minutes. Three intervals (135s) sit on top of that pass.
+  // A healthy pass is about two minutes. Six intervals (270s) sit above that pass.
   const interval = (Number(process.env.COLLECTOR_WATCH_S) || 45) * 1000;
   const n = Number(process.env.COLLECTOR_WATCHDOG_N);
   const mult = Number.isFinite(n) && n > 0 ? n : 6;

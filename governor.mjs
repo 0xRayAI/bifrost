@@ -59,8 +59,8 @@ export function wakeTitle(run, seat, openCount) {
 }
 
 const STALL_NOISE = new Set([
-  'feed_push', 'check_run', 'check_suite', 'workflow_run', 'ci_pass', 'ci_fail', 'pr_commit',
-  'health_ok', 'health_fail', 'deploy', 'deploy_fail', 'probe',
+  'feed_push', 'check_run', 'check_suite', 'workflow_run', 'ci_pass', 'ci_fail', 'pr_commit', 'commit_status',
+  'health_ok', 'health_fail', 'deploy', 'deploy_fail', 'deploy_pending', 'op_deploy', 'probe',
 ]);
 
 /** A feed row that resets the stall clock. CI, deploys, health, X, and seat presence do not. */
