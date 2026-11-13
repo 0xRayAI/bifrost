@@ -2,6 +2,12 @@
 
 Live board for burst-live. Railway root is `/`. The service builds this Dockerfile from git.
 
+The manual is a Docusaurus site in `docs-site/`. It is not copied into the image.
+
+```bash
+cd docs-site && npm install && npm run build
+```
+
 ## Build
 
 `collector/` is committed. The image copies it. Nothing assembles it at build time.

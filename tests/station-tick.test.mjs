@@ -110,6 +110,33 @@ function storedIds(data, seat) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((row) => JSON.parse(row).id);
 }
 
+function chicagoHalfHour(year, month, day) {
+  const guess = new Date(Date.UTC(year, month - 1, day, 7, 30));
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(guess).map((p) => [p.type, p.value]));
+  const wall = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return new Date(guess.getTime() - (wall - guess.getTime()));
+}
+
+function recentBusyHour() {
+  for (let back = 0; back < 6; back++) {
+    const day = new Date(Date.now() - back * 86400000);
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago', hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
+    }).formatToParts(day).map((p) => [p.type, p.value]));
+    if (parts.weekday === 'Sat' || parts.weekday === 'Sun') continue;
+    const instant = chicagoHalfHour(+parts.year, +parts.month, +parts.day);
+    const hour = stationHourKey(instant);
+    if (!hour || Date.now() - instant.getTime() >= 6 * 86400000) continue;
+    return { now: instant.toISOString(), hour };
+  }
+  throw new Error('no recent weekday station hour');
+}
+
 test('a busy weekday half hour still stores the station line', async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'station-tick-'));
   const seats = ['forge', 'critic', 'blinky'];
@@ -120,9 +147,10 @@ test('a busy weekday half hour still stores the station line', async () => {
     raw[seat] = seat + '-key-' + crypto.randomBytes(6).toString('hex');
     keys[seat] = crypto.createHash('sha256').update(raw[seat]).digest('hex');
   }
+  const busy = recentBusyHour();
   const srv = start(data, {
     STATION_NUDGE: 'on',
-    STATION_NOW: OPEN,
+    STATION_NOW: busy.now,
     SEAT_KEYS: JSON.stringify(keys),
   });
   try {
@@ -130,9 +158,9 @@ test('a busy weekday half hour still stores the station line', async () => {
     for (const seat of seats) {
       const ids = storedIds(data, seat);
       assert.equal(ids.includes(`open:${seat}`), true, seat);
-      assert.equal(ids.includes(`nudge:station:${seat}:${HOUR}`), true, seat);
+      assert.equal(ids.includes(`nudge:station:${seat}:${busy.hour}`), true, seat);
     }
-    assert.deepEqual(storedIds(data, 'arch1'), [`nudge:station:arch1:${HOUR}`]);
+    assert.deepEqual(storedIds(data, 'arch1'), [`nudge:station:arch1:${busy.hour}`]);
     assert.equal(storedIds(data, 'herald').some((id) => id.startsWith('nudge:station:')), false);
     const seen = await (await fetch(srv.base + '/inbox/forge?queue=1', {
       headers: { Authorization: 'Bearer ' + raw.forge },
@@ -141,7 +169,7 @@ test('a busy weekday half hour still stores the station line', async () => {
     const all = await (await fetch(srv.base + '/inbox/forge?all=1', {
       headers: { Authorization: 'Bearer ' + raw.forge },
     })).json();
-    assert.equal((all.lines || []).some((line) => line.id === `nudge:station:forge:${HOUR}` && line.reason === STATION_SENTENCE), true);
+    assert.equal((all.lines || []).some((line) => line.id === `nudge:station:forge:${busy.hour}` && line.reason === STATION_SENTENCE), true);
   } finally {
     await stop(srv.child);
     fs.rmSync(data, { recursive: true, force: true });

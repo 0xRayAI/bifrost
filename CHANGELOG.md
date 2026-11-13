@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Packet R files that seat, including the opener, once inside 48 hours. A dead assignee token stops writes for this process and does not finish the 14-day walk. The open-card refill does not replay routes a seeded volume already refused. The assignee latch remembers every 4xx except 401, treats 401 as a dead token for the process, and leaves a network miss unremembered. The server mints the assignee token and redacts it on collector logs.
+- The manual says `GET /archive` takes the `ARCHIVE_KEY` bearer, `GET /fleet-mode` is open, and `POST /fleet-mode` takes the ingest secret or the blinky seat key. `stalled` follows the accepted clock. `unreadable_repos` lists names, masked only when the site is gated. The card does not store gates. Rollback stays `house/live/app/rollback.sh` on the xray tree.
+- A quiet pass writes a clock file and leaves the event document in place. The clock file omits the board. A clock file over 2 MiB still moves the health clock and is not parsed. `card_age` is reported and does not change `ok`.
 - A shed inbox row whose card is already closed or merged is acked. A still-open shed row is unshed back into the queue, keeping its original time. Shed rows older than `BIFROST_SHED_TTL_S` (default 24h) are acked. The sweep runs at boot and on the governor tick. #69
 - A line marked shed is never the live head, including the rank-2 fallback. A ready handoff still leads a same-card tip. xray#823
 - An unassigned issue wakes arch1 when forge is dark, and forge otherwise. xray#815

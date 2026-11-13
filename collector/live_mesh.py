@@ -184,6 +184,7 @@ def build(args, gh):
     if not token and MODE != "box":
         raise SystemExit("no GH_TOKEN/GITHUB_TOKEN (read-only token); refusing to run unauthenticated")
     c = uc.Client(token or "")
+    c.assign_token = os.environ.get("GH_ASSIGN_TOKEN") or ""
     out_dir = Path(args.out).parent
     t0 = time.time()
     events, backfill_done = [], {}
@@ -317,8 +318,9 @@ def write(feed, out):
 
 
 def _write_beat(feed, out):
-    """Clock and header only. A quiet pass must not rewrite the event document."""
-    header = {k: v for k, v in feed.items() if k != "events"}
+    """Clock and header only. The board stays on the event document.
+    A quiet pass must not rewrite that document, and this file stays small enough to read."""
+    header = {k: v for k, v in feed.items() if k not in ("events", "board")}
     path = out.with_suffix(".beat.json")
     tmp = path.with_suffix(f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")

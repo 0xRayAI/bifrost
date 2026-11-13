@@ -9,6 +9,7 @@ import json, os, re, time, urllib.request, urllib.error, urllib.parse, http.clie
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import card_owner
 import live_packet
 import live_site
 import next_parent
@@ -361,6 +362,73 @@ def cloud_ids_in(text) -> list[str] | None:
     return found or None
 
 
+def assignee_seat(x) -> str:
+    """A seat-mapped assignee. A person login is not a seat."""
+    login = ""
+    who = x.get("assignee") if isinstance(x.get("assignee"), dict) else None
+    if who and isinstance(who.get("login"), str):
+        login = who["login"]
+    if not login:
+        for item in x.get("assignees") or []:
+            if isinstance(item, dict) and isinstance(item.get("login"), str) and item["login"]:
+                login = item["login"]
+                break
+    if not login:
+        return ""
+    mapped = node(login)
+    if mapped and mapped.lower() in card_owner.SEATS:
+        return mapped.lower()
+    if login.lower() in card_owner.SEATS:
+        return login.lower()
+    return ""
+
+
+def assignee_nodes():
+    """Shipped fleet-nodes.json, then the live env map. The committed fleet file wins on a login it names."""
+    path = Path(__file__).with_name("fleet-nodes.json")
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        data = {}
+    nodes = {str(k): v for k, v in data.items() if isinstance(v, str) and v} if isinstance(data, dict) else {}
+    nodes.update(NODE)
+    return nodes
+
+
+def assign_rewalk_done(paged, left, miss, auth_dead=False):
+    """The 14-day walk latches after a finished pass that still had budget and a live token.
+    A dead token, a cap of 10, or a write that never reached GitHub leaves the walk open."""
+    if paged != "done" or miss or auth_dead:
+        return False
+    return left > 0
+
+
+def assignee_bot(item, nodes):
+    """Packet R as a fleet bot login when the card is open and unassigned.
+    A person login is never returned. An existing assignee is left alone."""
+    if not isinstance(item, dict) or not isinstance(nodes, dict):
+        return None
+    if str(item.get("state") or "").lower() != "open":
+        return None
+    if isinstance(item.get("assignee"), dict) and item["assignee"].get("login"):
+        return None
+    for row in item.get("assignees") or []:
+        if isinstance(row, dict) and row.get("login"):
+            return None
+    packet = item.get("packet") if isinstance(item.get("packet"), dict) else None
+    if packet is None:
+        packet = live_packet.parse(item.get("body")) or None
+    if not isinstance(packet, dict):
+        return None
+    seat = str(live_packet.raci_roles(packet.get("raci")).get("R") or "").strip().lower()
+    if not seat:
+        return None
+    for login, mapped in nodes.items():
+        if str(mapped).strip().lower() == seat and str(login).endswith("[bot]"):
+            return str(login)
+    return None
+
+
 def card_fields(x) -> dict:
     """Board card fields from a PR / issue object this pass already fetched: branded title, state, labels and
     the packet block (sanitized, <= 200 chars a field). The body itself is discarded here, never stored.
@@ -370,6 +438,12 @@ def card_fields(x) -> dict:
               "labels": [lb.get("name") for lb in (x.get("labels") or []) if isinstance(lb, dict) and lb.get("name")][:8],
               "packet": live_packet.parse(body) or None,
               "fixes": closing_numbers(body, x.get("number"))}
+    named = card_owner.board_owner_line(body)
+    if named:
+        fields["board_owner"] = named
+    seat = assignee_seat(x)
+    if seat:
+        fields["assignee_seat"] = seat
     if live_packet.carries(body):
         fields["packet_file"] = True
     ids = cloud_ids_in(body)
@@ -493,9 +567,9 @@ class Client:
         self.gql_points = 0
         self.remaining = self.gql_remaining = None
 
-    def _req(self, url, method="GET", data=None, etag=None):
+    def _req(self, url, method="GET", data=None, etag=None, token=None):
         h = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
-             "User-Agent": "live-board-feed", "Authorization": f"Bearer {self.token}"}
+             "User-Agent": "live-board-feed", "Authorization": f"Bearer {token or self.token}"}
         if etag:
             h["If-None-Match"] = etag
         if data is not None:
@@ -529,6 +603,28 @@ class Client:
             if e.code == 401:
                 raise AuthExpired("HTTP 401 on REST") from None
             raise
+
+    def write_json(self, path, payload):
+        """POST JSON with the assignee token. No assignee token is a miss, not a read-token write.
+        401, 403, 404, and 422 are statuses. They are not AuthExpired."""
+        auth = getattr(self, "assign_token", "") or ""
+        if not auth:
+            return 0
+        data = json.dumps(payload).encode()
+        url = path if str(path).startswith("http") else API + path
+        self.calls += 1
+        try:
+            with urllib.request.urlopen(self._req(url, "POST", data, token=auth), timeout=40) as r:
+                r.read()
+                return r.status
+        except urllib.error.HTTPError as e:
+            try:
+                e.read()
+            finally:
+                e.close()
+            return e.code
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError):
+            return 0
 
     def gql(self, query, variables):
         if self.gql_remaining is not None and self.gql_remaining < GQL_FLOOR:
@@ -625,9 +721,19 @@ class RepoCollector:
         for k, v in (("etags", {}), ("cur", {}), ("prs", {}), ("ci", {}), ("reviewer", {}), ("bf", {}),
                      ("branch_shas", {}), ("tag_time", {}), ("gaps", {})):
             self.st.setdefault(k, v)
+        if self.st.get("assign_gen") != 4:
+            self.st["assign_tried"] = []
+            bf = self.st.get("bf")
+            if isinstance(bf, dict):
+                bf.pop("assign:r", None)
+                bf.pop("assign:issues", None)
+            self.st["assign_gen"] = 4
         self._sha_who = {}
         self.unreadable = None
         self._denied = None
+        self._assign_left = 10
+        self._assign_miss = False
+        self._assign_auth_dead = False
         for e in self.ev.values():
             self._index_sha(e)
         for e in self.ev.values():   # every stored event gets a credit (never blank), also ones from before the map
@@ -1063,6 +1169,11 @@ class RepoCollector:
             back = (datetime.now(timezone.utc) - timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%SZ")
             cur = min(cur, back)
             self.st["etags"].pop("pulls", None)
+        assign_rewalk = not self.st["bf"].get("assign:r")
+        if cur and assign_rewalk:
+            back = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            cur = min(cur, back)
+            self.st["etags"].pop("pulls", None)
         # Stop walks the whole list. The stored cursor stays until a strictly newer update,
         # so a same-instant +00:00 stamp does not replace the Z form.
         walk_from = cur
@@ -1089,6 +1200,8 @@ class RepoCollector:
                                       "merged_at": p.get("merged_at"), "state": p["state"], "base": p["base"]["ref"]}
             url = p["html_url"]
             fields = card_fields(p)
+            if str(p.get("state") or "").lower() == "open":
+                self.maybe_assign(c, p)
             if not fields.get("packet_file") and head and packet_file_on_ref(c, self.repo, head):
                 fields["packet_file"] = True
             self.put(f"{self.repo}#{n}:open", p["created_at"], shown_from(login), "GitHub", "pr_open",
@@ -1128,6 +1241,12 @@ class RepoCollector:
             self.st["bf"]["cards:pulls"] = True
         if bc_rewalk and getattr(self, "_paged_status", None) == "done":
             self.st["bf"]["bc:body"] = True
+        if assign_rewalk and assign_rewalk_done(
+                getattr(self, "_paged_status", None),
+                getattr(self, "_assign_left", 0),
+                getattr(self, "_assign_miss", False),
+                getattr(self, "_assign_auth_dead", False)):
+            self.st["bf"]["assign:r"] = True
         self._backfill_parent_doors(c)
 
     def enrich_prs(self, c, limit=20):
@@ -1451,6 +1570,7 @@ class RepoCollector:
                 return
             if st != 200 or not isinstance(data, dict):
                 return
+            self.maybe_assign(c, data)
             self._put_open_card(data)
             if f"{self.repo}!{n}:open" not in self.ev and f"{self.repo}#{n}:open" not in self.ev:
                 return
@@ -1460,6 +1580,11 @@ class RepoCollector:
         # One walk of every issue. The time cursor skips a number that was not updated after it,
         # and that number never becomes a card. put() is idempotent.
         stored = cur
+        assign_rewalk = not self.st["bf"].get("assign:issues")
+        if cur and assign_rewalk:
+            back = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            cur = min(cur, back)
+            self.st["etags"].pop("issues", None)
         cards_rewalk = not self.st["bf"].get("cards:issues")
         if cards_rewalk:
             cur = None
@@ -1477,11 +1602,19 @@ class RepoCollector:
             self.put(f"{self.repo}!{n}:open", i["created_at"], shown_from(login), "GitHub", "issue_open",
                      f"{self.short} issue #{n} opened · {i['title']}", i["html_url"], n, actor=login,
                      mentions=mentions(i.get("body")), **card_fields(i))
+            if str(i.get("state") or "").lower() == "open":
+                self.maybe_assign(c, i)
         self.st["cur"]["issues"] = newest
         if self._etag_new:
             self.st["etags"]["issues"] = self._etag_new
         if cards_rewalk and getattr(self, "_paged_status", None) == "done":
             self.st["bf"]["cards:issues"] = True
+        if assign_rewalk and assign_rewalk_done(
+                getattr(self, "_paged_status", None),
+                getattr(self, "_assign_left", 0),
+                getattr(self, "_assign_miss", False),
+                getattr(self, "_assign_auth_dead", False)):
+            self.st["bf"]["assign:issues"] = True
 
     def poll_comments(self, c):
         cur = self.st["cur"].get("comments")
@@ -1780,8 +1913,49 @@ class RepoCollector:
             self._denied = int(code)
 
     # ---------------------------------------------------------------- one pass
+    def maybe_assign(self, c, item):
+        """Best-effort assignee write. A read-only token must not stop the feed.
+        A network miss is not remembered, so the next pass can try the same card.
+        403, 404, and any other 4xx except 401 are remembered, so a refusal is not posted again.
+        401 marks the assignee token dead for this process and does not remember the card."""
+        if getattr(self, "_assign_auth_dead", False):
+            return
+        if getattr(self, "_assign_left", 0) <= 0 or not getattr(c, "token", None):
+            return
+        login = assignee_bot(item, assignee_nodes())
+        if not login:
+            return
+        try:
+            number = int(item.get("number"))
+        except (TypeError, ValueError):
+            return
+        tried = self.st.setdefault("assign_tried", [])
+        if not isinstance(tried, list):
+            tried = []
+            self.st["assign_tried"] = tried
+        key = f"{self.repo}#{number}"
+        if key in tried:
+            return
+        try:
+            code = c.write_json(f"/repos/{self.repo}/issues/{number}/assignees", {"assignees": [login]})
+        except AuthExpired:
+            self._assign_auth_dead = True
+            return
+        if code == 401:
+            self._assign_auth_dead = True
+            return
+        if not code or code >= 500:
+            self._assign_miss = True
+            return
+        tried.append(key)
+        if len(tried) > 500:
+            del tried[:-500]
+        self._assign_left -= 1
+
     def run(self, c, deadline):
         self._denied = None
+        self._assign_left = 10
+        self._assign_miss = False
         steps = [("pulls", self.poll_pulls), ("issues", self.poll_issues),
                  ("open cards", self.backfill_open_cards), ("issue events", self.poll_issue_events),
                  ("merger backfill", self.backfill_mergers),
