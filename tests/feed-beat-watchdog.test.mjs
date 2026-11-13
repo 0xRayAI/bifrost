@@ -38,6 +38,8 @@ while kill -0 $PPID 2>/dev/null; do i=$((i+1)); printf '{"events":[%s' "$i" > "$
     assert.match(logs, /collector: started pid/, logs.slice(-2000));
     await new Promise(r => setTimeout(r, 8000));   // limit is 3 s (1 s x 3); give it well over two limits
     assert.doesNotMatch(logs, /feed loop stalled/, logs.slice(-2000));
+    const src = fs.readFileSync(path.join(APP, 'server.mjs'), 'utf8');
+    assert.match(src, /n > 0 \? n : 6/);
   } finally {
     const gone = new Promise(r => child.once('exit', r));
     child.kill('SIGTERM');
