@@ -2886,8 +2886,8 @@ function healthBody() {   // public: counts, times, ages (s) and wake states; no
   const quiet = feedQuiet(now);
   const behind = !warming && cardsBehindData(now);
   const stalled = feedStalled(now);
-  // feed_quiet (collector file mtime) and cards lagging open-card data are the gates.
-  // data_age and box_age are reported and do not change ok.
+  // feed_quiet (event file or quiet beat, whichever the reader accepted) and cards lagging open-card data are the gates.
+  // data_age, card_age, and box_age are reported and do not change ok.
   const ok = !quiet && !behind;
   const staleStatus = Number(SRCS.github.header && SRCS.github.header.stale_status) || 0;
   const unread = unreadableRepos();
@@ -2934,17 +2934,21 @@ function applyFeedRead(msg) {
   routeSoon();
 }
 function readBeatClock() {
-  // A quiet pass rewrites this small file, not the event document. The clock still moves.
+  // A quiet pass rewrites this clock file, not the event document.
+  // The board stays on the event document. A file over 2 MiB still moves the clock and is not parsed.
   let st;
   try { st = fs.statSync(GH_BEAT); } catch { return; }
-  if (!(st.size > 0) || st.size > 2 * 1024 * 1024) return;
+  if (!(st.size > 0)) return;
   if (st.mtimeMs > (collector.lastWrite || 0)) collector.lastWrite = st.mtimeMs;
+  if (st.size > 2 * 1024 * 1024) return;
   const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
   if (sig === collector.beatSig) return;
   let hdr;
   try { hdr = JSON.parse(fs.readFileSync(GH_BEAT, 'utf8')); } catch { return; }
   if (!hdr || typeof hdr !== 'object' || Array.isArray(hdr)) return;
   delete hdr.events;
+  const prev = SRCS.github.header;
+  if (!hdr.board && prev && prev.board) hdr.board = prev.board;
   collector.beatSig = sig;
   collector.watchKilled = false;
   applyCollectorHeader(hdr);

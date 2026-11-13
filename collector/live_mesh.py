@@ -317,8 +317,9 @@ def write(feed, out):
 
 
 def _write_beat(feed, out):
-    """Clock and header only. A quiet pass must not rewrite the event document."""
-    header = {k: v for k, v in feed.items() if k != "events"}
+    """Clock and header only. The board stays on the event document.
+    A quiet pass must not rewrite that document, and this file stays small enough to read."""
+    header = {k: v for k, v in feed.items() if k not in ("events", "board")}
     path = out.with_suffix(".beat.json")
     tmp = path.with_suffix(f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")

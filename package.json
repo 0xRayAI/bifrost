@@ -7,7 +7,7 @@
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test tests/inbox-queue.test.mjs tests/dockerfile-copy.test.mjs tests/collector-build.test.mjs tests/health.test.mjs tests/health-ci.test.mjs tests/health-exit.test.mjs tests/overlay.test.mjs tests/page.test.mjs tests/board-face.test.mjs tests/stall-outside.test.mjs tests/station-tick.test.mjs tests/cloud-node.test.mjs tests/github-work.test.mjs tests/ready-rering.test.mjs tests/ci-clear.test.mjs tests/quiet-ready.test.mjs tests/seat-comment-wake.test.mjs tests/feed-beat-watchdog.test.mjs"
+    "test": "node --test tests/inbox-queue.test.mjs tests/dockerfile-copy.test.mjs tests/collector-build.test.mjs tests/health.test.mjs tests/health-ci.test.mjs tests/health-exit.test.mjs tests/overlay.test.mjs tests/page.test.mjs tests/board-face.test.mjs tests/stall-outside.test.mjs tests/station-tick.test.mjs tests/cloud-node.test.mjs tests/github-work.test.mjs tests/ready-rering.test.mjs tests/ci-clear.test.mjs tests/quiet-ready.test.mjs tests/seat-comment-wake.test.mjs tests/feed-beat-watchdog.test.mjs tests/quiet-beat.test.mjs"
   },
   "engines": {
     "node": ">=24.22.1"
