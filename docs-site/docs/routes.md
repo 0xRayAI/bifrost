@@ -12,8 +12,9 @@ Seat and ingest routes:
 | Method | Path | Who |
 | --- | --- | --- |
 | POST | `/cursor/webhook` | Cursor, `X-Webhook-Signature` HMAC |
-| GET, POST | `/fleet-mode` | seat key |
-| GET | `/archive` | seat key |
+| GET | `/fleet-mode` | no auth |
+| POST | `/fleet-mode` | ingest secret, or the blinky seat key. Any other seat is `403 not the mode switch` |
+| GET | `/archive` | `ARCHIVE_KEY` bearer |
 | POST | `/ingest`, `/ingest/delta` | ingest secret |
 | POST | `/activity` | the seat's own token |
 | POST | `/activity/ingest` | ingest secret |

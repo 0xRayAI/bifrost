@@ -40,4 +40,4 @@ Under the board: Watchdog, Health, Governor, Station nudge, Nudge, Follow-up.
 
 Gold returns: hand it on into Git, back to the queue into Next line, and one more ring from Follow-up.
 
-A packet on the card has goal, constraints, path, acceptance, gates, evidence, next owner, escalate, and raci. R is who does the work. A is who answers. A live card missing R or A is amber. Scope is another name for goal.
+A packet on the card has goal, constraints, path, acceptance, evidence, next owner, escalate, and raci. The board does not store gates. R is who does the work. A is who answers. A live card missing R or A is amber. Scope is another name for goal.

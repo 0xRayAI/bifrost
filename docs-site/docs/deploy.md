@@ -13,7 +13,7 @@ The public board is updated from the xray tree:
 MESH_APP_DEPLOY_DIR=/tmp/burst-live-deploy bash house/live/app/deploy.sh
 ```
 
-That script assembles `collector/` and uploads the app directory. A Railway build of the xray repo straight from git stops in the Dockerfile because `collector/` is not assembled. `railway down` removes the live deployment. Restore a previous SUCCESS with `house/live/app/rollback.sh <deployment-id>`. The id has to be a UUID. `railway redeploy` rebuilds only the latest deployment.
+That script assembles `collector/` and uploads the app directory. A Railway build of the xray repo straight from git stops in the Dockerfile because `collector/` is not assembled. `railway down` removes the live deployment. From that same xray tree, restore a previous SUCCESS with `house/live/app/rollback.sh <deployment-id>`. The script is `house/live/app/rollback.sh` on xray main. It is not in this repo. The id has to be a UUID. `railway redeploy` rebuilds only the latest deployment.
 
 A short 502 or 503 during the cutover is the health gate until the next poll is 200. `ok` stays false while the accepted clock is quiet.
 

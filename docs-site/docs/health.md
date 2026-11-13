@@ -15,6 +15,6 @@ sidebar_label: Health
 
 `collector_age` is the age of that accepted clock. `card_age` is the age of the last board card change (`CARD_STALE_S` default 600 is a label). `data_age` is the newest GitHub event time (`DATA_STALE_S` default 21600 is a label). `box_age` is the last box status push. `card_age`, `data_age`, and `box_age` do not change `ok`.
 
-`stalled` is a separate flag. It uses the raw mtime of the event file or the beat, inside `COLLECTOR_WATCH_S` (default 45 seconds) times `COLLECTOR_WATCHDOG_N` (default 3). A collector that is still writing a fat beat is not stalled. It is quiet until the reader accepts that mtime.
+`stalled` is a separate flag. It follows the accepted clock when that clock is newer than the collector child start, and the child start otherwise. The window is `COLLECTOR_WATCH_S` (default 45 seconds) times `COLLECTOR_WATCHDOG_N` (default 3). A fat beat moves the accepted clock before the 2 MiB return, so that write is not stalled. Raw mtime of the event file or the beat is only the empty-board guard: an empty card list does not replace a live board while `stalled` is true or that file age is past the same window.
 
-`board` on the health body is `building`, `empty`, or `live`. `origin` is the pinned public origin, or null. The body carries a repo count and times. It does not carry repo names.
+`board` on the health body is `building`, `empty`, or `live`. `origin` is the pinned public origin, or null. The body carries a repo count and times. `unreadable_repos` lists the names the collector could not read. Those names are real when the site is public. They are masked as `private repo #n` only when the site is gated. The committed `collector/site.json` is public. `LIVE_PUBLIC` wins over that file.
