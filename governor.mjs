@@ -21,12 +21,13 @@ export function tripwire() {
 // Timed run (the clock). The tripwire is the trigger once nothing has moved for tripMs:
 //   stall: open cards on the board -> each seat with open work is woken with its own deadline (perSeatMs apart).
 //          A due plan card does not hide this. The CoS seat is included so the plan still wakes.
+//          A seat whose open lines are only nudges is not woken. The nudge is that wake.
+//          Live cards and no inbox lines wake the CoS seat.
 //   plan: the plan card is due and the board has no other open card -> the CoS seat is woken once;
 //   empty: no open cards -> the CoS (coord role) seat is woken to pull the next work.
 //          Weekly burn at or above 75% keeps that wake quiet (no seat is woken).
-// The CoS can start a run by hand (POST /clock). Blockers come back as one line; the countdown shows on the board until a
-// seat moves something, which clears the clock. Each trigger fires at most once per window: it re-arms only after the
-// board moves or another full window passes, never on every tick.
+// The CoS can start the same run by hand (POST /clock), including the empty-board wake.
+// A seat move clears the clock. A trigger fires once for a still board and waits for the next move.
 /** Seats marked parked or dark. A roster without those arrays uses fallback. */
 export function mutedSeats(roster, fallback = []) {
   const data = roster && typeof roster === 'object' ? roster : {};
@@ -57,6 +58,41 @@ export function wakeTitle(run, seat, openCount) {
   return `timed run: ${openCount} open line(s)`;
 }
 
+const STALL_NOISE = new Set([
+  'feed_push', 'check_run', 'check_suite', 'workflow_run', 'ci_pass', 'ci_fail', 'pr_commit', 'commit_status',
+  'health_ok', 'health_fail', 'deploy', 'deploy_fail', 'deploy_pending', 'op_deploy', 'probe',
+]);
+
+/** A feed row that resets the stall clock. CI, deploys, health, X, and seat presence do not. */
+export function stallMove(e) {
+  if (!e || typeof e !== 'object' || e.moves === false) return false;
+  const k = typeof e.kind === 'string' ? e.kind : '';
+  if (!k || STALL_NOISE.has(k)) return false;
+  if (/watcher|turn|subagent/.test(k)) return false;
+  if (k.startsWith('x_') || k.startsWith('seat_')) return false;
+  return true;
+}
+
+/** Who the clock wakes for this board, or quiet when weekly burn holds an empty board. */
+export function runChoice(board) {
+  const { openCards = 0, openSeats = [], coord = null, scheduled = 0, planDue = false, burnQuiet = false, nudgeCovered = false } = board || {};
+  if (openCards > 0) {
+    let seats = openSeats.length ? [...openSeats] : [];
+    if (!seats.length) {
+      if (nudgeCovered || !coord) return null;
+      seats = [coord];
+    }
+    if (planDue && coord && !seats.includes(coord)) seats.push(coord);
+    seats = seats.filter(Boolean);
+    if (!seats.length) return null;
+    return { seats, reason: 'stall', planSeat: planDue ? coord : null };
+  }
+  if (planDue && coord) return { seats: [coord], reason: 'plan', planSeat: coord };
+  if (scheduled > 0 || !coord) return null;
+  if (burnQuiet) return { seats: [], reason: 'quiet' };
+  return { seats: [coord], reason: 'empty', planSeat: null };
+}
+
 export function createClock({ tripMs, perSeatMs, now = Date.now(), state = null }) {
   const saved = state && typeof state === 'object' ? state : null;
   let lastFp = saved && saved.lastFp != null ? saved.lastFp : null;
@@ -76,31 +112,28 @@ export function createClock({ tripMs, perSeatMs, now = Date.now(), state = null 
     get run() { return run; },
     snapshot() { return { lastFp, lastMove, lastTrip, run }; },
     /** -> 'plan' | 'stall' | 'empty' | 'quiet' | 'cleared' | null.
-     *  moveFp: fingerprint of seat moves (events, acks); board: { openCards, openSeats, coord, planDue, burnQuiet }.
+     *  moveFp: fingerprint of board moves (events, acks); board: { openCards, openSeats, coord, planDue, burnQuiet, nudgeCovered }.
      *  A due plan does not hide a stall: seats with open work are still woken.
-     *  burnQuiet skips the empty-board wake and does not start a run. */
+     *  burnQuiet skips the empty-board wake and does not start a run.
+     *  A fire waits for the next fingerprint change. */
     observe(moveFp, t, board) {
       if (moveFp !== lastFp) {
         const first = lastFp === null; lastFp = moveFp; lastMove = t; lastTrip = null;
         if (!first && run) { run = null; return 'cleared'; }
         return null;
       }
-      const armed = lastTrip === null || t - lastTrip >= tripMs;
-      if (!armed || t - lastMove < tripMs) return null;
-      const { openCards = 0, openSeats = [], coord = null, scheduled = 0, planDue = false, burnQuiet = false } = board || {};
-      if (openCards > 0) {
-        const seats = openSeats.length ? [...openSeats] : [coord];
-        if (planDue && coord && !seats.includes(coord)) seats.push(coord);
-        if (!seats.filter(Boolean).length) return null;
-        start(t, seats, 'stall', null, { planSeat: planDue ? coord : null });
-        return 'stall';
-      }
-      if (planDue && coord) { start(t, [coord], 'plan', null, { planSeat: coord }); return 'plan'; }
-      if (scheduled > 0) return null;   // a card waiting on start_after is not an empty board
-      if (!coord) return null;
-      if (burnQuiet) { lastTrip = t; return 'quiet'; }   // 75% weekly burn: no empty-board wake
-      start(t, [coord], 'empty'); return 'empty';
+      if (lastTrip !== null || t - lastMove < tripMs) return null;
+      const choice = runChoice(board);
+      if (!choice) return null;
+      if (choice.reason === 'quiet') { lastTrip = t; return 'quiet'; }
+      start(t, choice.seats, choice.reason, null, { planSeat: choice.planSeat || null });
+      return choice.reason;
     },
-    startByHand(t, seats, by) { return start(t, seats, 'cos', by); },
+    startFromBoard(t, board, by) {
+      const choice = runChoice(board);
+      if (!choice || choice.reason === 'quiet' || !choice.seats.length) return null;
+      const reason = choice.reason === 'stall' ? 'cos' : choice.reason;
+      return start(t, choice.seats, reason, by || null, { planSeat: choice.planSeat || null });
+    },
   };
 }

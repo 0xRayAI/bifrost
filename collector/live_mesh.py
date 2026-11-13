@@ -177,8 +177,32 @@ def board_wave(events, write, prompts=None):
     return wave
 
 
+def touch_pass_beat(out):
+    """Move the watchdog clock before the pass. The end beat still carries the header."""
+    out = Path(out)
+    guard_out(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    path = out.with_suffix(".beat.json")
+    now = datetime.now(ff.CT).isoformat()
+    header = {"generated_at": now, "source": MODE}
+    try:
+        if path.exists() and 0 < path.stat().st_size <= 2 * 1024 * 1024:
+            old = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(old, dict):
+                old.pop("events", None)
+                old.pop("board", None)
+                old["generated_at"] = now
+                header = old
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        pass
+    tmp = path.with_suffix(f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def build(args, gh):
     ff._live_pass_t0 = time.time()
+    touch_pass_beat(args.out)
     token_check()
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token and MODE != "box":

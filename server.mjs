@@ -18,7 +18,7 @@ import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
-import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats } from './governor.mjs';
+import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
@@ -2202,10 +2202,33 @@ function recentPromptSeats(now = Date.now()) {
   }
   return out;
 }
+function isClockNudge(line) {
+  const type = String(line && (line.type || line.kind) || '');
+  if (type === 'nudge' || type === 'timed_run') return true;
+  const id = String(line && line.id || '');
+  return id.startsWith('nudge:') || id.startsWith('clock:');
+}
 function stallOpenSeats(now = Date.now()) {
   const counts = {};
-  for (const seat of SEAT_IDS) counts[seat] = openLines(seat).length;
+  for (const seat of SEAT_IDS) counts[seat] = openLines(seat).filter(line => !isClockNudge(line)).length;
   return selectStallSeats(SEAT_IDS, loadMutedSeats(), counts, recentPromptSeats(now));
+}
+function nudgeCoversOpen() {
+  let nudge = false;
+  for (const seat of SEAT_IDS) {
+    for (const line of openLines(seat)) {
+      if (!isClockNudge(line)) return false;
+      nudge = true;
+    }
+  }
+  return nudge;
+}
+function clockPicture(now = Date.now()) {
+  const wave = waveBoard(bfCards, now);
+  return {
+    openCards: liveWorkCount(bfCards), scheduled: scheduledCards(now), openSeats: stallOpenSeats(now),
+    coord: COORD_SEAT, planDue: !!wave.planDue, burnQuiet: burnQuiet(weeklyBurnFraction()), nudgeCovered: nudgeCoversOpen(),
+  };
 }
 function wakeRun(run) {
   for (const [seat, by] of Object.entries(run.deadlines)) {
@@ -2218,7 +2241,7 @@ function wakeRun(run) {
   }
   console.log(`clock: ${run.reason} run started, ${Object.keys(run.deadlines).length} seat(s), ends ${run.ends_at}`);
 }
-function moveFp() { return fingerprint([...evs.values()].map(v => v.e).filter(e => e && e.moves !== false), { acks: Object.values(inboxAcks).reduce((n, a) => n + (a ? a.length : 0), 0) }); }
+function moveFp() { return fingerprint([...evs.values()].map(v => v.e).filter(stallMove), { acks: Object.values(inboxAcks).reduce((n, a) => n + (a ? a.length : 0), 0) }); }
 function flushHeld() {
   const ready = batch.drain({ attention: attentionNow() });
   if (!ready.length) return false;
@@ -2244,7 +2267,7 @@ function governorRun(now = Date.now()) {
     seq++; fullDirty = true;
   }
   const w = wakeBoard(now);
-  const r = clock.observe(moveFp(), now, { openCards: liveWorkCount(bfCards), scheduled: scheduledCards(now), openSeats: stallOpenSeats(now), coord: COORD_SEAT, planDue: scheduled.planDue, burnQuiet: burnQuiet(weeklyBurnFraction()) });
+  const r = clock.observe(moveFp(), now, clockPicture(now));
   bfWrite('clock.json', JSON.stringify(clock.snapshot()));
   if (r === 'stall' || r === 'empty' || r === 'plan') wakeRun(clock.run);
   if (r === 'quiet') console.log('clock: weekly burn quiet, empty board not woken');
@@ -2878,9 +2901,10 @@ function feedQuiet(now = Date.now()) {
   return now - at > ms;
 }
 function watchLimitMs() {
+  // A healthy pass is about two minutes. Six intervals (270s) sit above that pass.
   const interval = (Number(process.env.COLLECTOR_WATCH_S) || 45) * 1000;
   const n = Number(process.env.COLLECTOR_WATCHDOG_N);
-  const mult = Number.isFinite(n) && n > 0 ? n : 3;
+  const mult = Number.isFinite(n) && n > 0 ? n : 6;
   return interval * mult;
 }
 function collectorTick(fallback = 0) {
@@ -4130,9 +4154,11 @@ async function handle(req, res) {
     req.resume();
     if (!who) return json(req, res, 401, { error: 'unauthorized' });
     if (!CLOCK_SEATS.includes(who)) return json(req, res, 403, { error: 'not a clock seat' });
-    const seats = stallOpenSeats();
-    if (!seats.length) return json(req, res, 200, { ok: true, started: false, reason: 'no open work' });
-    const run = clock.startByHand(Date.now(), seats, who); wakeRun(run); touchSeat(who);
+    const now = Date.now();
+    const picture = clockPicture(now);
+    const run = clock.startFromBoard(now, picture, who);
+    if (!run) return json(req, res, 200, { ok: true, started: false, reason: picture.burnQuiet && !picture.openCards ? 'weekly burn quiet' : 'no open work' });
+    wakeRun(run); touchSeat(who);
     seq++; header = mergedHeader(); fullDirty = true;
     return json(req, res, 200, { ok: true, started: true, clock: run });
   }
