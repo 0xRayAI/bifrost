@@ -184,6 +184,7 @@ def build(args, gh):
     if not token and MODE != "box":
         raise SystemExit("no GH_TOKEN/GITHUB_TOKEN (read-only token); refusing to run unauthenticated")
     c = uc.Client(token or "")
+    c.assign_token = os.environ.get("GH_ASSIGN_TOKEN") or ""
     out_dir = Path(args.out).parent
     t0 = time.time()
     events, backfill_done = [], {}

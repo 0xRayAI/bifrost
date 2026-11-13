@@ -2632,6 +2632,26 @@ function collectorScript() {
   const feed = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'feed', 'live_mesh.py');
   return fs.existsSync(feed) ? feed : '';
 }
+function assignToken() {
+  const id = process.env.GITHUB_ASSIGN_APP_ID || '';
+  const install = process.env.GITHUB_ASSIGN_INSTALLATION_ID || '';
+  const key = process.env.GITHUB_ASSIGN_PRIVATE_KEY || '';
+  const script = path.join(COLLECTOR_DIR, 'gh-app-token-assign.mjs');
+  if (!id || !install || !key || !fs.existsSync(script)) return Promise.resolve('');
+  return new Promise(resolve => {
+    const child = spawn('node', [script], {
+      env: { PATH: process.env.PATH || '', GITHUB_ASSIGN_APP_ID: id, GITHUB_ASSIGN_INSTALLATION_ID: install, GITHUB_ASSIGN_PRIVATE_KEY: key },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const chunks = [];
+    child.stdout.on('data', d => chunks.push(d));
+    child.on('error', () => resolve(''));
+    child.on('close', code => {
+      const minted = Buffer.concat(chunks).toString('utf8').trim();
+      resolve(code === 0 && minted.startsWith('ghs_') ? minted : '');
+    });
+  });
+}
 async function startCollector() {
   const tok = process.env.GITHUB_READ_TOKEN || '';
   if (!tok || process.env.COLLECTOR === 'off') { console.log('collector: off (no GITHUB_READ_TOKEN or COLLECTOR=off)'); return; }
@@ -2645,6 +2665,9 @@ async function startCollector() {
   if (!script) { console.log('collector: code missing; off'); return; }
   fs.mkdirSync(path.join(DATA_DIR, 'feed'), { recursive: true }); fs.mkdirSync(path.join(DATA_DIR, 'home'), { recursive: true });
   seedStore();
+  const assign = await assignToken();
+  if (assign) process.stdout.write('collector: assignee token set\n');
+  else if (process.env.GITHUB_ASSIGN_APP_ID) process.stdout.write('collector: assignee mint failed\n');
   const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: path.join(DATA_DIR, 'home'), LANG: 'C.UTF-8',
     TZ: 'America/Chicago', PYTHONDONTWRITEBYTECODE: '1', LIVE_MODE: 'github', LIVE_NO_CHECKS: '1', GH_TOKEN: tok,
     LIVE_MESH_SRC: path.join(COLLECTOR_DIR, 'upstream'),
@@ -2656,6 +2679,7 @@ async function startCollector() {
   if (railTok) env.RAILWAY_TOKEN = railTok;   // deploy poll. Never written into the image.
   if (process.env.RAILWAY_PROJECTS) env.RAILWAY_PROJECTS = process.env.RAILWAY_PROJECTS;
   if (process.env.RAILWAY_POLL_S) env.RAILWAY_POLL_S = process.env.RAILWAY_POLL_S;
+  if (assign) env.GH_ASSIGN_TOKEN = assign;
   if (process.env.GITHUB_HOLD_LABEL) env.GITHUB_HOLD_LABEL = process.env.GITHUB_HOLD_LABEL;
   if (process.env.NO_NUDGE_REPOS != null) env.NO_NUDGE_REPOS = process.env.NO_NUDGE_REPOS;
   for (const k of ['UPSTREAM_REPO', 'UPSTREAM_PINNED', 'UPSTREAM_REPOS', 'XRAY_REPO', 'XRAY_OURS', 'SEAT_PRESENCE', 'LIVE_NODE_MAP', 'LIVE_BRAND', 'LIVE_BRAND_RE', 'LIVE_SHOW_UNMAPPED', 'LIVE_FLEET_SEATS', 'HUMAN_ALIASES']) if (process.env[k] != null) env[k] = process.env[k];
@@ -2668,7 +2692,7 @@ async function startCollector() {
   console.log(`collector: started pid ${child.pid}`);
   for (const st of [child.stdout, child.stderr]) {
     let buf = '';
-    st.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { let line = buf.slice(0, i).replaceAll(tok, '[redacted]'); if (railTok) line = line.replaceAll(railTok, '[redacted]'); console.log('collector: ' + redactRepos(line).slice(0, 400)); buf = buf.slice(i + 1); } });
+    st.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { let line = buf.slice(0, i).replaceAll(tok, '[redacted]'); if (assign) line = line.replaceAll(assign, '[redacted]'); if (railTok) line = line.replaceAll(railTok, '[redacted]'); console.log('collector: ' + redactRepos(line).slice(0, 400)); buf = buf.slice(i + 1); } });
   }
   child.on('error', e => console.log('collector: spawn failed (' + e.code + ')'));
   child.on('exit', (code, sig) => {

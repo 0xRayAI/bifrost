@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import card_owner
 import ci_inbox
 import live_packet
 
@@ -817,9 +818,15 @@ def model(extra_events=None, now=None, prompts=None, held=None):
         pk = e.get("packet") if isinstance(e.get("packet"), dict) else {}
         pk = {f: live_packet.clean(v) for f, v in pk.items() if f in live_packet.FIELDS and v}
         title = e.get("title") or re.sub(r"^.*?opened · ", "", str(e.get("label") or ""))
+        opener = str(e.get("from") or "")
+        owner = card_owner.card_owner(
+            e.get("board_owner"), e.get("assignee_seat"), opener,
+            cloud=opener.lower() == "cloudagents",
+            operator=opener.lower() == "operator",
+        )
         cards[k] = {"key": k, "kind": "pr" if e["kind"] == "pr_open" else "issue", "repo": e["repo"],
                     "number": int(e["number"]), "title": live_packet.clean(title)[:120],
-                    "url": live_packet.clean(e.get("source") or ""), "owner": str(e.get("from") or "-")[:24],
+                    "url": live_packet.clean(e.get("source") or ""), "owner": owner[:24],
                     "labels": [live_packet.clean(x)[:30] for x in (e.get("labels") or [])][:6],
                     "packet": pk, "packet_file": bool(e.get("packet_file")),
                     "_closed": e.get("pr_state") == "closed", "_closed_t": _t({"t_ct": e.get("closed_at")}) if e.get("closed_at") else 0,

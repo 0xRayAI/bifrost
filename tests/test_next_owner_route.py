@@ -63,6 +63,22 @@ class NextOwnerRoute(unittest.TestCase):
         reasons = [(line.get("seat"), line.get("reason")) for line in lines]
         self.assertIn(("arch1", "packet next owner"), reasons)
 
+    def test_packet_r_files_the_opener(self):
+        event = {
+            "id": "0xRayAI/xray#1039:open",
+            "t_ct": "2026-11-13T12:00:00-06:00",
+            "from": "arch1",
+            "actor": "arch10x[bot]",
+            "kind": "issue_open",
+            "label": "xray issue #1039 opened",
+            "repo": "0xRayAI/xray",
+            "number": 1039,
+            "packet": {"raci": "R: arch1 A: Blaze"},
+        }
+        lines = inbox_pass._direct_all(event, ROLES)
+        reasons = [(line.get("seat"), line.get("reason")) for line in lines]
+        self.assertIn(("arch1", "packet R"), reasons)
+
     def test_a_new_pull_still_reaches_critic_as_a_review_ask(self):
         event = {
             "id": "0xRayAI/xray#1:open",

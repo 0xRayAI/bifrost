@@ -9,11 +9,13 @@ Run by the pusher every cycle (no secrets on argv; the ingest secret comes on st
 The local spool ($MESH_RUN/feed/inbox-spool/<seat>.jsonl) is a ring buffer (last 300 lines a seat); the Railway
 server is the source of truth (GET /inbox/<seat>).
 The first pass marks every id seen and delivers only events inside the seed grace (SEED_GRACE_S). Older history is
-never delivered. A later pass delivers an id once, and skips an id first seen after ROUTE_MAX_AGE_S. Inbox lines carry
+never delivered. A later pass delivers an id once, and skips an id first seen after ROUTE_MAX_AGE_S. Packet R is the
+exception: an already-seen event whose R seat was never filed gets one line, when the event is inside 48 hours.
+Inbox lines carry
 ids, kinds, repo#number, sha, title (event label, already in the public feed), url and a short reason; never bodies,
 prompt text or secrets.
 """
-import json, os, sys, time
+import json, os, re, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -168,12 +170,9 @@ def watched_by_seat(seat, event):
     return ("*" in repos or str(event.get("repo") or "") in repos) and ("*" in kinds or inbox._kind(event) in kinds)
 
 
-def packet_next_seat(event, roles):
-    """Packet next owner, when it names one of our seats. The opener is not a tip."""
-    pk = event.get("packet")
-    if not isinstance(pk, dict):
-        return None
-    raw = str(pk.get("next owner") or "").strip()
+def _named_seat(raw, roles):
+    """A packet name that is one of our seats. Arch1 counts. A kit role maps through."""
+    raw = str(raw or "").strip()
     if not raw:
         return None
     known = set(our_seats()) | {str(s) for s in (roles.get("routing") or {})}
@@ -198,8 +197,38 @@ def packet_next_seat(event, roles):
     return None
 
 
+def packet_next_seat(event, roles):
+    """Packet next owner, when it names one of our seats. The opener is not a tip."""
+    pk = event.get("packet")
+    if not isinstance(pk, dict):
+        return None
+    return _named_seat(pk.get("next owner"), roles)
+
+
+_RACI_R = re.compile(r"(?:^|[\s,;·])R\s*[=:]\s*(\S+)", re.I)
+
+
+def packet_r_seat(event, roles):
+    """Packet R, the seat who does the work. R: arch1 assigns arch1. A mention is not required."""
+    pk = event.get("packet")
+    if not isinstance(pk, dict):
+        return None
+    found = _RACI_R.search(str(pk.get("raci") or ""))
+    if not found:
+        return None
+    return _named_seat(found.group(1), roles)
+
+
 def _direct_all(event, roles):
     """PR #5 routes plus the extra Chat Bot seats (roles.extra_seats: kinds / merge_bases / needles)."""
+    if event.get("_r_only"):
+        # Already routed once, before R was an assignment. File only that seat.
+        # pr_heads and the unowned fallback must not run again.
+        responsible = packet_r_seat(event, roles)
+        if not responsible:
+            return []
+        line = inbox._line(event, responsible, "packet R")
+        return [line] if line else []
     kind = inbox._kind(event)
     if kind.startswith(PULSE_KINDS):   # covers Lead prompts too ("prompt" is a pulse kind)
         return []   # a pulse is never a packet or a wake
@@ -276,6 +305,14 @@ def _direct_all(event, roles):
         line = inbox._line(event, nxt, "packet next owner")
         if line:
             out.append(line)
+    # R is who does the work. It assigns that seat even when they opened it,
+    # and even when the body never says @arch10x. Otherwise the line looks unowned
+    # and the fallback files it on blinky.
+    responsible = packet_r_seat(event, roles)
+    if responsible:
+        line = inbox._line(event, responsible, "packet R")
+        if line:
+            out.append(line)
     ours = our_seats()
     if ours:   # a line to a seat outside ours (unknown, sample, unkeyed) is read by nobody: drop it, fall back below
         out = [l for l in out if l.get("seat") in ours]
@@ -302,7 +339,7 @@ def _direct_all(event, roles):
         if l.get("type") == "info":
             kept.append(l)   # merged / pr_close tell the author even when they did it
             continue
-        if me and l.get("seat") == me:
+        if me and l.get("seat") == me and l.get("reason") != "packet R":
             continue
         kept.append(l)
     return kept
@@ -390,12 +427,50 @@ def cmd_pull(path):
     if d.get("reset"):   # a full resync (first pull, server restart): history, never delivered
         st = _load(STATE, {})
         seen = st.get("seen") or {}
+        skip = set(st.get("seed_skip") or []) if isinstance(st.get("seed_skip"), list) else set()
         for e in d.get("events") or []:
             if isinstance(e, dict) and isinstance(e.get("id"), str):
                 seen.setdefault(e["id"], int(_t(e)))
+                skip.add(e["id"])
         st["seen"] = seen
+        st["seed_skip"] = sorted(skip)
         _save(STATE, st)
     print(c.get("cursor") or "")
+
+
+REFILL_S = 14 * 24 * 3600
+_OPEN_CARD = {"pr_open", "issue_open"}
+
+
+def _line_covered(known, event_id, seat, line_id):
+    if line_id in known or event_id in known:
+        return True
+    return f"{event_id}:r:{seat}" in known
+
+
+def _refill_open_cards(ev, ids, roles, now, new_ids, skip, directory):
+    """File a missing seat line for an open card inside the refill window.
+    A seed-skipped id stays silent. deliver() is not used, so stall lines are not added."""
+    written = 0
+    for k in ids:
+        e = ev.get(k)
+        if not isinstance(e, dict) or k in new_ids or k in skip:
+            continue
+        if str(e.get("kind") or "") not in _OPEN_CARD:
+            continue
+        ts = _t(e)
+        if not ts or now - ts > REFILL_S:
+            continue
+        for line in _direct_all(e, roles):
+            seat = str(line.get("seat") or "")
+            line_id = str(line.get("id") or "")
+            if not seat or not line_id or set(line) - set(inbox._FIELDS):
+                continue
+            path = directory / f"{seat}.jsonl"
+            if _line_covered(inbox._known_ids(path), k, seat, line_id):
+                continue
+            written += inbox._append(path, [line])
+    return written
 
 
 def cmd_pass(now=None):
@@ -424,6 +499,7 @@ def cmd_pass(now=None):
     first = not st.get("seeded")
     seeded_at = now if first else float(st.get("seeded_at") or 0)
     floor = max(seeded_at - SEED_GRACE_S, now - ROUTE_MAX_AGE_S)
+    before = set(seen)
     for e in new:
         seen[e["id"]] = int(_t(e))
     if len(seen) > MAX_SEEN:
@@ -433,6 +509,12 @@ def cmd_pass(now=None):
     if bad:
         print(f"inbox_pass: {bad} event(s) with missing/bad t_ct marked seen, not delivered", file=sys.stderr)
     new = [e for e in new if _t(e) >= floor]   # history (pre-seed or late backfill) is marked seen, never delivered
+    skip_set = set(st.get("seed_skip") or []) if isinstance(st.get("seed_skip"), list) else set()
+    delivered = {e["id"] for e in new}
+    for eid in list(seen):
+        if eid not in before and eid not in delivered:
+            skip_set.add(eid)
+    skip_set = {k for k in skip_set if k in ev}
     changed = [e for e in changed if _t(e)]   # a kind change is live even when the original t_ct is old
     # Edited comments (#300 follow-up): the collector re-reads a comment when updated_at moves and puts it again under the
     # same id, so `seen` alone would drop a mention added on edit. Remember each comment's @handles; a handle added later
@@ -458,7 +540,26 @@ def cmd_pass(now=None):
             edits.append({**e, "id": f"{k}:edit:{'+'.join(added)}", "kind": "comment_edit", "mentions": added,
                           "t_ct": datetime.fromtimestamp(now, timezone.utc).isoformat(), "edited_from": k})
     ments = {k: v for k, v in ments.items() if k in seen or k in ev}
-    new = new + edits + changed
+    # Packet R used to be ignored, so a seen open with R: arch1 stayed on blinky.
+    # File that seat once. The seed pass only records, so a fresh volume does not
+    # replay history. An open older than 48 hours is recorded and not delivered.
+    R_BACKFILL_S = 48 * 3600
+    r_sent = st.get("r_sent") if isinstance(st.get("r_sent"), dict) else {}
+    r_roles = json.loads(ROLES.read_text())
+    r_back = []
+    for k in ids:
+        e = ev[k]
+        if not isinstance(e, dict):
+            continue
+        seat = packet_r_seat(e, r_roles)
+        if not seat or r_sent.get(k) == seat:
+            continue
+        r_sent[k] = seat
+        if first or k in new_ids or not _t(e) or now - _t(e) > R_BACKFILL_S:
+            continue
+        r_back.append({**e, "id": f"{k}:r:{seat}", "_r_only": True})
+    r_sent = {k: v for k, v in r_sent.items() if k in seen or k in ev}
+    new = new + edits + changed + r_back
     # `new` is already inside the floor: seed grace on the first pass, route max age after that.
     # History was marked seen above and is not in this list. Deliver the grace window on the seed pass too,
     # or a fresh @arch10x comment is swallowed when the route volume is empty (#620).
@@ -530,8 +631,10 @@ def cmd_pass(now=None):
                 fresh.append(line)
             lines += inbox._append(path, fresh)
         inbox.maybe_board(len(new), log=lambda m: print(m, file=sys.stderr))
+    if not first:
+        lines += _refill_open_cards(ev, ids, r_roles, now, new_ids, skip_set, INBOX)
     sig = {k: v for k, v in sig.items() if k in seen or k in ev}
-    _save(STATE, {"seeded": True, "seeded_at": seeded_at, "seen": seen, "sent": st.get("sent") or [], "ments": ments, "sig": sig})
+    _save(STATE, {"seeded": True, "seeded_at": seeded_at, "seen": seen, "sent": st.get("sent") or [], "ments": ments, "sig": sig, "r_sent": r_sent, "seed_skip": sorted(skip_set)})
     ring()
     _save(CACHE, c)
     print(f"{len(new)} {lines}")
