@@ -384,7 +384,7 @@ def assignee_seat(x) -> str:
 
 
 def assignee_nodes():
-    """Shipped fleet-nodes.json, then the live env map. The env wins on the same login."""
+    """Shipped fleet-nodes.json, then the live env map. The committed fleet file wins on a login it names."""
     path = Path(__file__).with_name("fleet-nodes.json")
     try:
         data = json.loads(path.read_text())
@@ -396,13 +396,10 @@ def assignee_nodes():
 
 
 def assign_rewalk_done(paged, left, miss, auth_dead=False):
-    """The 14-day walk latches after a finished pass that still had budget,
-    or after the assignee token is dead for this process.
-    A cap of 10, or a write that never reached GitHub, leaves the walk open."""
-    if paged != "done" or miss:
+    """The 14-day walk latches after a finished pass that still had budget and a live token.
+    A dead token, a cap of 10, or a write that never reached GitHub leaves the walk open."""
+    if paged != "done" or miss or auth_dead:
         return False
-    if auth_dead:
-        return True
     return left > 0
 
 

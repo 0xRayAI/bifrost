@@ -107,7 +107,8 @@ class AssigneeBot(unittest.TestCase):
         self.assertFalse(live_collect.assign_rewalk_done("done", 0, False))
         self.assertFalse(live_collect.assign_rewalk_done("done", 10, True))
         self.assertTrue(live_collect.assign_rewalk_done("done", 10, False))
-        self.assertTrue(live_collect.assign_rewalk_done("done", 0, False, True))
+        self.assertFalse(live_collect.assign_rewalk_done("done", 0, False, True))
+        self.assertFalse(live_collect.assign_rewalk_done("done", 10, False, True))
         self.assertFalse(live_collect.assign_rewalk_done("partial", 10, False, True))
         self.assertFalse(live_collect.assign_rewalk_done("done", 10, True, True))
 
