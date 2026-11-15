@@ -322,6 +322,10 @@ def _direct_all(event, roles):
         if line:
             out.append(line)
     me = actor_seat(event, roles)
+    if me:
+        for l in out:   # who did this, so the wake gate can skip ringing that seat
+            if not l.get("from"):
+                l["from"] = me
     if me and ours and me in ours and kind in COMMENT_KINDS:
         for l in out:   # who wrote the comment, so Bifrost can keep seat-to-seat comments off the wake path
             if l.get("type") in COMMENT_KINDS and l.get("seat") != me:

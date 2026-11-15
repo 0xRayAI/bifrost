@@ -10,6 +10,9 @@
 // The repeat key of a seat comment is repo#n plus the head sha, or `nosha`. It is never the comment id.
 // More than SEAT_COMMENT_LIMIT seat comments on one repo#n inside a rolling hour trips a breaker: that repo#n is paused
 // for an hour (a human comment clears it) and one needs_human line goes to the coordinator for Blaze.
+// An event whose actor is the target seat's own App or bot login (the routing map, e.g. forge0x1[bot] for forge) is
+// stored and not rung for that seat. Other seats still wake. Packet R still rings the opener.
+// dumpBreaker / restoreBreaker write the comment counts and the pause so a restart can reload them.
 
 export const ROLLING_HOUR_MS = 60 * 60 * 1000;
 const COMMENT = new Set(['pr_comment', 'issue_comment', 'review_comment', 'comment']);
@@ -82,6 +85,28 @@ export function isP1Issue(line) {
   return isIssue(line) && !isPr(line) && labelsOf(line).includes('p1');
 }
 const isIssueOpen = line => typeOf(line) === 'issue_open';
+const isPacketR = line => String(line && line.reason || '').trim().toLowerCase() === 'packet r';
+/** Seat that caused the event: line.from / actor / author, mapped through ctx.loginToSeat when present. */
+export function actorSeat(line, ctx = {}) {
+  if (typeof ctx.actorOf === 'function') {
+    const named = String(ctx.actorOf(line) || '').trim().toLowerCase();
+    if (named) return named;
+  }
+  const mapGet = (low) => {
+    const map = ctx.loginToSeat;
+    if (!map || !low) return '';
+    if (typeof map === 'function') return String(map(low) || '').trim().toLowerCase();
+    if (typeof map.get === 'function') return String(map.get(low) || '').trim().toLowerCase();
+    return String(map[low] || '').trim().toLowerCase();
+  };
+  for (const key of ['from', 'actor', 'author', 'sender', 'merged_by']) {
+    const raw = line && line[key];
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const low = raw.trim().toLowerCase();
+    return mapGet(low) || low;
+  }
+  return '';
+}
 export function isHotfix(line) {
   return String(line && line.flag || '').trim().toLowerCase() === 'hotfix';
 }
@@ -164,6 +189,9 @@ export function classifyBatch(lines, ctx = {}) {
     const owner = String(ownerOf(sample) || '').trim().toLowerCase();
     const fallback = String(ctx.defaultSeat || 'forge').trim().toLowerCase() || 'forge';
     const target = owner || fallback;
+    const actor = actorSeat(sample, ctx);
+    const hasR = idxs.some(i => isPacketR(rows[i].line));
+    const skipOwn = !!(actor && actor === target && !hasR);
     let woke = false;
     for (const i of idxs) {
       const row = rows[i];
@@ -173,6 +201,12 @@ export function classifyBatch(lines, ctx = {}) {
         continue;
       }
       if (!woke) {
+        if (skipOwn) {
+          skips.push({ seat: target, line: row.line, reason: 'own_actor' });
+          woke = true;
+          consumed.add(i);
+          continue;
+        }
         wakes.push({ seat: target, line: row.line });
         woke = true;
         consumed.add(i);
@@ -181,7 +215,10 @@ export function classifyBatch(lines, ctx = {}) {
       skips.push({ seat: row.seat, line: row.line, reason: 'fanout' });
       consumed.add(i);
     }
-    if (!woke) wakes.push({ seat: target, line: sample });
+    if (!woke) {
+      if (skipOwn) skips.push({ seat: target, line: sample, reason: 'own_actor' });
+      else wakes.push({ seat: target, line: sample });
+    }
   }
 
   rows.forEach((row, i) => {
@@ -209,8 +246,9 @@ export function classifyBatch(lines, ctx = {}) {
       if (owner) seat = owner;
     }
     if (!seat) { skips.push({ seat: '', line, reason: 'unassigned' }); return; }
-    if (String(line.from || '').trim().toLowerCase() === seat) {
-      skips.push({ seat, line, reason: 'own_post' });
+    const actor = actorSeat(line, ctx);
+    if (actor && actor === seat && !isPacketR(line)) {
+      skips.push({ seat, line, reason: 'own_actor' });
       return;
     }
     wakes.push({ seat, line });
@@ -439,5 +477,34 @@ export function restoreWakeBook(state, wakeRows, skipRows, now, windowMs) {
     const t = Number.isFinite(row.t) ? row.t : Date.parse(row.t_ct || '');
     if (!Number.isFinite(t) || now - t > windowMs || now - t < 0) continue;
     state.skips.push({ t, seat: String(row.seat || ''), reason: String(row.reason || ''), id: String(row.id || ''), kind: String(row.kind || '') });
+  }
+}
+
+export function dumpBreaker(state, now = Date.now()) {
+  const seatComments = {};
+  for (const [key, rows] of state.seatComments || []) {
+    const live = (rows || []).filter(r => Number.isFinite(r.t) && now - r.t < ROLLING_HOUR_MS && now - r.t >= 0);
+    if (live.length) seatComments[key] = live.map(r => ({ t: r.t, id: String(r.id || '') }));
+  }
+  const breaker = {};
+  for (const [key, brk] of state.breaker || []) {
+    if (brk && Number.isFinite(brk.until) && brk.until > now) {
+      breaker[key] = { until: brk.until, since: Number.isFinite(brk.since) ? brk.since : now };
+    }
+  }
+  return { seatComments, breaker };
+}
+
+export function restoreBreaker(state, dump, now = Date.now()) {
+  if (!dump || typeof dump !== 'object') return;
+  for (const [key, rows] of Object.entries(dump.seatComments || {})) {
+    const live = (Array.isArray(rows) ? rows : []).filter(r => Number.isFinite(r.t) && now - r.t < ROLLING_HOUR_MS && now - r.t >= 0)
+      .map(r => ({ t: r.t, id: String(r.id || '') }));
+    if (live.length) state.seatComments.set(key, live);
+  }
+  for (const [key, brk] of Object.entries(dump.breaker || {})) {
+    if (brk && Number.isFinite(brk.until) && brk.until > now) {
+      state.breaker.set(key, { until: brk.until, since: Number.isFinite(brk.since) ? brk.since : now });
+    }
   }
 }
