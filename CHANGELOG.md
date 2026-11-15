@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A seat is not woken for a GitHub event whose actor is that seat's own App or bot login. The line is still stored, and other seats still wake. Packet R still rings the opener. xray#1060
+- The wake breaker (the comment count and the pause on a repo#n) is written to the live volume and reloaded on boot, so a redeploy does not clear it. xray#979
+
 - A quiet pass still leaves the event document in place when the board signature matches. A card change with the same events rewrites the document, then writes a beat that carries `board_sig` and no board body. `updated_ct` and `closed_t` do not force that rewrite.
 - The stall clock moves on a board event or an ack. CI, deploys, health, X, and seat presence do not reset it. A still board wakes once and waits for the next move. A nudge line is that wake. `POST /clock` starts the same run, including an empty board. Weekly burn still keeps the empty wake quiet.
 - The collector writes the watchdog beat at the start of a pass, and the stall window defaults to 270 seconds. A pass of about two minutes is no longer inside ten seconds of the kill. #65

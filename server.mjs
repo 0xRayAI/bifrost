@@ -22,7 +22,7 @@ import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallS
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat } from './wake-gate.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -569,13 +569,19 @@ function flagBreaker(line, now) {
 }
 function offerLines(lines) {
   const cfg = wakeCfg();
-  const { wakes, skips } = classifyBatch((Array.isArray(lines) ? lines : []).filter(wakeLineKept), { owner: ownerOfLine, defaultSeat: defaultIssueSeat(process.env) });
+  const ctx = { owner: ownerOfLine, defaultSeat: defaultIssueSeat(process.env), loginToSeat: loginMap() };
+  const { wakes, skips } = classifyBatch((Array.isArray(lines) ? lines : []).filter(wakeLineKept), ctx);
   for (const s of skips) recordSkip(s.seat, s.line, s.reason);
   const now = Date.now();
   for (const w of wakes) {
     const seat = canonSeat(w.seat);
     if (!seat || !SEAT_WEBHOOKS[seat]) continue;
     if (cfg.paused) { recordSkip(seat, w.line, 'paused'); continue; }
+    const actor = actorSeat(w.line, ctx);
+    if (actor && actor === seat && String(w.line.reason || '').trim().toLowerCase() !== 'packet r') {
+      recordSkip(seat, w.line, 'own_actor');
+      continue;
+    }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
     if (d.op === 'skip') {
       recordSkip(seat, d.line, d.reason);
@@ -589,6 +595,7 @@ function offerLines(lines) {
     }
     enqueuePending(seat, d.line);
   }
+  persistWakeBreaker();
 }
 function noteWake(seat, line) {
   try {
@@ -832,6 +839,18 @@ loadFleetMode();
 function persistWakeOk() {
   try { writeWakeOk(path.join(STATE_DIR, 'wake-ok.json'), wakeOkAt); }
   catch (e) { console.log('wake: save failed ' + (e && e.code || 'write')); }
+}
+function persistWakeBreaker() {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const file = path.join(STATE_DIR, 'wake-breaker.json');
+    fs.writeFileSync(file + '.tmp', JSON.stringify(dumpBreaker(wakeState)));
+    fs.renameSync(file + '.tmp', file);
+  } catch (e) { console.log('wake: breaker save failed ' + ((e && e.code) || 'write')); }
+}
+function loadWakeBreaker() {
+  try { restoreBreaker(wakeState, JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'wake-breaker.json'), 'utf8'))); }
+  catch { /* no breaker file yet */ }
 }
 Object.assign(wakeOkAt, readWakeOk(path.join(STATE_DIR, 'wake-ok.json')));
 const NUDGE_L1_MS = (Number(process.env.NUDGE_L1_S) || 3600) * 1000, NUDGE_L2_MS = (Number(process.env.NUDGE_L2_S) || 1800) * 1000;
@@ -3511,6 +3530,7 @@ function loadPersistedWakes() {   // last non-skipped wake per seat survives a r
     skipRows = fs.readFileSync(path.join(STATE_DIR, 'wake-skips.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   } catch { /* no skip file yet */ }
   restoreWakeBook(wakeState, rows.filter(row => row && row.outcome !== 'skipped'), skipRows, Date.now(), wakeConfig(process.env).statMs);
+  loadWakeBreaker();
 }
 header = mergedHeader(); fullDirty = true;
 function clearSeatWork(f, seat) {

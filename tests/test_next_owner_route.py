@@ -157,6 +157,22 @@ class NextOwnerRoute(unittest.TestCase):
             else:
                 os.environ["LIVE_BOARD"] = board
 
+    def test_issue_open_by_forge_stamps_from_on_the_fallback_line(self):
+        event = {
+            "id": "0xRayAI/xray#1060:open",
+            "t_ct": "2026-11-15T09:00:00-06:00",
+            "actor": "forge0x1[bot]",
+            "kind": "issue_open",
+            "label": "xray issue #1060 opened",
+            "repo": "0xRayAI/xray",
+            "number": 1060,
+        }
+        lines = inbox_pass._direct_all(event, ROLES)
+        self.assertNotIn("forge", [line.get("seat") for line in lines])
+        blinky = [line for line in lines if line.get("seat") == "blinky"]
+        self.assertTrue(blinky)
+        self.assertTrue(all(line.get("from") == "forge" for line in blinky))
+
     def test_a_new_pull_still_reaches_critic_as_a_review_ask(self):
         event = {
             "id": "0xRayAI/xray#1:open",
