@@ -75,6 +75,7 @@ const PASS = new Set(['success', 'skipped', 'neutral']);
 const CLOSED = new Set(['merged', 'merge', 'pr_close', 'issue_close', 'pr_closed', 'issue_closed', 'closed']);
 const GREEN_REASON = 'CI green on current head';
 const RUN_PAGES = 20;
+const RERUN_MS = 60 * 1000;
 
 function slots(state) {
   if (!state.stationAt) state.stationAt = new Map();
@@ -102,27 +103,44 @@ function ghWord(value) {
   return String(value).trim().toLowerCase();
 }
 
-// Actions runs for one head. total_count must be covered, and every run completed.
-export function runsAllGreen(runs) {
-  const list = Array.isArray(runs) ? runs : [];
-  if (!list.length) return false;
-  return list.every((row) => {
-    const status = ghWord(row && row.status);
-    const conclusion = ghWord(row && row.conclusion);
-    return status === 'completed' && PASS.has(conclusion);
-  });
-}
-
 function mapRun(row) {
+  const attempt = Number(row && row.run_attempt);
   return {
     name: String(row && row.name || ''),
     status: ghWord(row && row.status),
     conclusion: ghWord(row && row.conclusion),
+    workflow_id: row && row.workflow_id != null ? row.workflow_id : '',
+    event: ghWord(row && row.event),
+    run_attempt: Number.isFinite(attempt) ? attempt : 0,
   };
 }
 
+// One row per workflow and event: the highest run_attempt.
+export function latestRuns(runs) {
+  const best = new Map();
+  for (const row of Array.isArray(runs) ? runs : []) {
+    if (!row) continue;
+    const id = row.workflow_id != null && row.workflow_id !== '' ? String(row.workflow_id) : String(row.name || '');
+    const key = id + '\n' + ghWord(row.event);
+    const attempt = Number(row.run_attempt);
+    const n = Number.isFinite(attempt) ? attempt : 0;
+    const prev = best.get(key);
+    if (!prev || n >= prev.n) best.set(key, { n, row });
+  }
+  return [...best.values()].map(item => mapRun(item.row));
+}
+
+// Actions runs for one head. total_count must be covered, and every latest attempt completed.
+export function runsAllGreen(runs) {
+  const list = latestRuns(runs);
+  if (!list.length) return false;
+  return list.every((row) => row.status === 'completed' && PASS.has(row.conclusion));
+}
+
 // GITHUB_READ_TOKEN only. A missing token, a short page, a 403, or a 429 is not a green head.
-// opts.state fetches each sha once and backs off after 403 or 429. A 403 is logged once.
+// Only a green list is cached. A pending head, a 500, or a timeout is fetched again on a later
+// event, at least 60s apart, until that head is green. A new sha is a new key.
+// 403 and 429 share one in-memory backoff. A 403 is logged once.
 export async function githubHeadRuns(repo, sha, opts = {}) {
   const token = String(opts.token || '').trim();
   if (!token) return null;
@@ -135,9 +153,12 @@ export async function githubHeadRuns(repo, sha, opts = {}) {
   const state = opts.state;
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   const backoffMs = Number.isFinite(opts.backoffMs) ? opts.backoffMs : 15 * 60 * 1000;
+  const gap = Number.isFinite(opts.gapMs) ? opts.gapMs : RERUN_MS;
   const key = `${parts[0]}/${parts[1]}@${head}`.toLowerCase();
   if (state && now < state.quietUntil) return null;
   if (state && state.fetched && state.fetched.has(key)) return state.fetched.get(key);
+  if (state && state.retryAt && state.retryAt.has(key) && now < state.retryAt.get(key)) return null;
+  if (state && state.inflight && state.inflight.has(key)) return state.inflight.get(key);
 
   const headers = {
     Authorization: 'Bearer ' + token,
@@ -147,47 +168,64 @@ export async function githubHeadRuns(repo, sha, opts = {}) {
   };
   const root = `/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/actions/runs`;
 
-  async function finish() {
+  const job = (async () => {
     const rows = [];
     let total = null;
+    let blocked = '';
     for (let page = 1; page <= RUN_PAGES; page++) {
       const path = `${root}?head_sha=${encodeURIComponent(head)}&per_page=100&page=${page}`;
       let res;
       try {
         res = await fetchImpl(api + path, { headers, signal: AbortSignal.timeout(15000) });
       } catch {
-        return null;
+        blocked = 'miss';
+        break;
       }
-      if (!res) return null;
-      if (res.status === 403 || res.status === 429) {
-        if (state) {
-          state.quietUntil = now + backoffMs;
-          state.fetched.delete(key);
-          if (res.status === 403 && !state.deniedLogged) {
-            state.deniedLogged = true;
-            if (typeof opts.log === 'function') opts.log('wake: actions runs 403, green wake off');
-          }
-        }
-        return null;
-      }
-      if (!res.ok) return null;
+      if (!res) { blocked = 'miss'; break; }
+      if (res.status === 403 || res.status === 429) { blocked = res.status === 403 ? 'denied' : 'rate'; break; }
+      if (!res.ok) { blocked = 'miss'; break; }
       let body;
-      try { body = await res.json(); } catch { return null; }
+      try { body = await res.json(); } catch { blocked = 'miss'; break; }
       const chunk = body && body.workflow_runs;
-      if (!Array.isArray(chunk)) return null;
+      if (!Array.isArray(chunk)) { blocked = 'miss'; break; }
       if (total == null) {
         total = Number(body.total_count);
-        if (!Number.isFinite(total) || total < 0) return null;
+        if (!Number.isFinite(total) || total < 0) { blocked = 'miss'; break; }
       }
       rows.push(...chunk);
-      if (rows.length >= total) return rows.length === total ? rows.map(mapRun) : null;
-      if (chunk.length === 0) return null;
+      if (rows.length >= total) {
+        if (rows.length !== total) blocked = 'miss';
+        break;
+      }
+      if (chunk.length === 0) { blocked = 'miss'; break; }
     }
-    return null;
+    if (!blocked && rows.length !== total) blocked = 'miss';
+    if (blocked === 'denied' || blocked === 'rate') {
+      if (state) {
+        state.quietUntil = now + backoffMs;
+        if (blocked === 'denied' && !state.deniedLogged) {
+          state.deniedLogged = true;
+          if (typeof opts.log === 'function') opts.log('wake: actions runs 403, green wake off');
+        }
+      }
+      return null;
+    }
+    const runs = blocked ? null : latestRuns(rows);
+    if (runs && runsAllGreen(runs)) {
+      if (state) state.fetched.set(key, runs);
+      return runs;
+    }
+    if (state) {
+      if (!state.retryAt) state.retryAt = new Map();
+      state.retryAt.set(key, now + gap);
+    }
+    return runs;
+  })();
+  if (state) {
+    if (!state.inflight) state.inflight = new Map();
+    state.inflight.set(key, job);
+    job.finally(() => { if (state.inflight.get(key) === job) state.inflight.delete(key); });
   }
-
-  const job = finish();
-  if (state) state.fetched.set(key, job);
   return job;
 }
 

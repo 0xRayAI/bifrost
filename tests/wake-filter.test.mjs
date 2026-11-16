@@ -157,6 +157,51 @@ test('a sha is fetched once, and a 403 is logged once', async () => {
   assert.equal(logs.length, 1);
 });
 
+test('a pending head is fetched again after 60s and wakes once it is green', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const other = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const state = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+  let phase = 'pending';
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    calls += 1;
+    const head = new URL(url).searchParams.get('head_sha');
+    const conclusion = phase === 'green' && head === sha ? 'success' : null;
+    const status = conclusion ? 'completed' : 'in_progress';
+    return { ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
+      { name: 'ci', workflow_id: 4, event: 'pull_request', run_attempt: 1, status, conclusion },
+    ] }) };
+  };
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha };
+  const opt = { token: 'ghs_test', fetch: fetchImpl, state, gapMs: 60_000 };
+  const pending = await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 0 });
+  assert.equal(criticGreenLine(ev, pending || [], {}), null);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 30_000 }), null);
+  assert.equal(calls, 1);
+  const switched = await githubHeadRuns('0xRayAI/clearing', other, { ...opt, now: 30_000 });
+  assert.equal(calls, 2);
+  assert.equal(criticGreenLine({ ...ev, sha: other, head_sha: other }, switched || [], {}), null);
+  phase = 'green';
+  const green = await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 60_000 });
+  assert.equal(calls, 3);
+  const ping = criticGreenLine(ev, green, {});
+  assert.equal(ping && ping.sha, sha);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 120_000 }), green);
+  assert.equal(calls, 3);
+});
+
+test('a failed attempt does not block the successful re-run', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
+    { name: 'ci', workflow_id: 9, event: 'pull_request', run_attempt: 2, status: 'completed', conclusion: 'success' },
+    { name: 'ci', workflow_id: 9, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'failure' },
+  ] }) });
+  const runs = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl });
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].run_attempt, 2);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, runs, {}).sha, sha);
+});
+
 test('a merged or closed pull does not wake critic', () => {
   const checks = [
     { name: 'unit', status: 'completed', conclusion: 'success' },
