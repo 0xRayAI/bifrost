@@ -28,7 +28,7 @@ test('a mention or an owner prompt wakes, and a bare comment does not', () => {
   assert.equal(allowWake(on, 'critic', line({ type: 'dispatch', reason: 'handoff' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'start_after', reason: 'start after 2020-01-01T08:00-06:00' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'prompt', kind: 'seat_prompt' }), ctx()).allow, true);
-  assert.equal(allowWake(on, 'forge', line({ type: 'issue_comment', title: 'hello' }), ctx()).allow, true);
+  assert.equal(allowWake(on, 'forge', line({ type: 'issue_comment', title: 'hello' }), ctx()).allow, false);
   for (const type of ['pr_update', 'pr_open', 'issue_open', 'deploy', 'cloud_finished', 'cloud_reply']) {
     assert.equal(allowWake(on, 'forge', line({ type }), ctx()).allow, false, type);
   }
@@ -69,6 +69,43 @@ test('critic gets one green head, and near or mill get an R assignment', () => {
   assert.equal(allowWake(on, 'mill', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'near', line({ type: 'pr_open', raci: 'R=near A=forge' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, false);
+});
+
+test('a green head wakes critic once, a repeat is skipped, and a newer head wakes again', () => {
+  const state = createWakeState();
+  const green = (sha, kind) => line({
+    type: kind, kind, sha, repo: '0xRayAI/clearing', number: 28,
+    conclusion: 'success', status: 'completed',
+  });
+  const first = green('3781168cc00a', 'check_suite');
+  assert.equal(allowWake(on, 'critic', first, ctx({ state })).allow, true);
+  commitWake(state, 'critic', first, NOW);
+  assert.equal(allowWake(on, 'critic', green('3781168cc00a', 'ci_pass'), ctx({ state })).allow, false);
+  const next = green('aaaaaaaaaaaa', 'workflow_run');
+  assert.equal(allowWake(on, 'critic', next, ctx({ state })).allow, true);
+  commitWake(state, 'critic', next, NOW);
+  assert.equal(allowWake(on, 'critic', green('aaaaaaaaaaaa', 'status'), ctx({ state })).allow, false);
+  assert.equal(allowWake(on, 'critic', line({ type: 'check_suite', sha: 'bbbbbbbbbbbb', conclusion: 'failure' }), ctx({ state })).allow, false);
+});
+
+test('a bare comment does not wake, and a review on the owed seat does', () => {
+  for (const type of ['pr_comment', 'issue_comment', 'review_comment', 'comment']) {
+    const got = allowWake(on, 'forge', line({ type, title: 'hello', reason: 'note' }), ctx());
+    assert.deepEqual(got, { allow: false, reason: 'filter' }, type);
+  }
+  assert.equal(allowWake(on, 'forge', line({ type: 'review', title: 'LGTM' }), ctx({ owner: 'forge' })).allow, true);
+  assert.equal(allowWake(on, 'critic', line({ type: 'review', title: 'LGTM' }), ctx({ owner: 'forge' })).allow, false);
+});
+
+test('a ci_fail wakes only the owed seat on the current head', () => {
+  const none = ctx({ owner: '', head: 'abc123' });
+  for (const seat of ['forge', 'critic', 'mill']) {
+    assert.equal(allowWake(on, seat, line({ type: 'ci_fail', sha: 'abc123' }), none).allow, false, seat);
+  }
+  const owed = ctx({ owner: 'mill', head: 'abc123' });
+  assert.equal(allowWake(on, 'mill', line({ type: 'ci_fail', sha: 'abc123' }), owed).allow, true);
+  assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'abc123' }), owed).allow, false);
+  assert.equal(allowWake(on, 'mill', line({ type: 'ci_fail', sha: 'oldhead' }), owed).allow, false);
 });
 
 test('a ladder nudge and the stall clock still wake', () => {

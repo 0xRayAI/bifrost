@@ -23,7 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGith
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
-import { readWakeFilter, allowWake, owedSeat, commitWake } from './wake-filter.mjs';
+import { readWakeFilter, allowWake, owedSeat, commitWake, criticGreenLine, greenHeadSha } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -1256,8 +1256,12 @@ function noteCi(ev) {
   const key = repo && Number.isInteger(n) ? repo + '#' + n : '';
   const out = batch.observeCi(ev, { attention: attentionNow(), busy: key ? batch.busy(key) || prBusy({ repo, number: n }) : false });
   const line = storeFlush(ev, out);
-  if (!line) return;
-  postSeatLines({ lines: [line] }, null);
+  const lines = [];
+  if (line) lines.push(line);
+  const ping = criticGreenLine(ev);
+  if (ping && !(line && line.seat === 'critic' && greenHeadSha(line) === ping.sha)) lines.push(ping);
+  if (!lines.length) return;
+  postSeatLines({ lines }, null);
 }
 function takeBatch(lines) {
   const kept = [];

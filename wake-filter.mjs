@@ -5,9 +5,9 @@
 
 const HOUR_MS = 60 * 60 * 1000;
 const REVIEW = new Set(['review', 'critic_pass', 'critic_fail', 'verdict']);
-const GREEN = new Set(['ci_pass', 'ready', 'live_pass']);
+const GREEN = new Set(['ci_pass', 'ci_success', 'ready', 'live_pass']);
+const SUITE = new Set(['check_suite', 'workflow_run', 'commit_status', 'status']);
 const DIRECT = new Set(['dispatch', 'packet', 'handoff', 'start_after']);
-const COMMENT = new Set(['pr_comment', 'issue_comment', 'review_comment', 'comment']);
 const ROUTED = new Set(['near', 'mill']);
 
 function kindOf(line) {
@@ -73,9 +73,49 @@ function assignedR(line, seat) {
   return new RegExp(`\\bR\\s*=\\s*${seat}\\b`, 'i').test(raci);
 }
 
+export function greenHeadSha(line) {
+  return String(line && (line.sha || line.head_sha || line.head) || '').trim().toLowerCase();
+}
+
+function greenWord(line) {
+  return `${line && line.conclusion || ''} ${line && line.status || ''} ${line && line.state || ''}`.toLowerCase();
+}
+
+// A finished green suite. A single check_run is not the head.
+export function isCriticGreen(line) {
+  const kind = kindOf(line);
+  if (GREEN.has(kind)) return true;
+  if (!SUITE.has(kind)) return false;
+  const word = greenWord(line);
+  if (/\b(failure|failed|fail|error|cancelled|canceled|cancel|timed_out|pending|queued|in_progress)\b/.test(word)) return false;
+  return /\b(success|passed|green)\b/.test(word);
+}
+
 function greenKey(line) {
-  const sha = String(line && line.sha || '').trim().toLowerCase();
-  return `${String(line && line.repo || '').toLowerCase()}#${Number(line && line.number) || 0}|${sha || String(line && line.id || '')}`;
+  const repo = String(line && line.repo || '').toLowerCase();
+  const n = Number(line && line.number) || 0;
+  return `${repo}#${n}|${greenHeadSha(line)}`;
+}
+
+export function criticGreenLine(ev) {
+  if (!isCriticGreen(ev)) return null;
+  const sha = greenHeadSha(ev);
+  const repo = String(ev && ev.repo || '').trim();
+  const n = Number(ev && ev.number);
+  if (!sha || sha.length < 7 || !repo || !Number.isInteger(n) || n < 1) return null;
+  return {
+    id: `wake:critic:${repo.toLowerCase()}#${n}:${sha}`,
+    t_ct: String(ev.t_ct || ''),
+    seat: 'critic',
+    type: 'ci_pass',
+    kind: 'ci_pass',
+    repo,
+    number: n,
+    sha,
+    title: 'CI green',
+    url: String(ev.url || ev.source || `https://github.com/${repo}/pull/${n}`),
+    reason: 'CI green on current head',
+  };
 }
 
 function slots(state) {
@@ -99,7 +139,7 @@ export function commitWake(state, seat, line, now) {
   const book = slots(state);
   const who = String(seat || '').toLowerCase();
   if (stationLine(line)) book.stationAt.set(who, now);
-  if (who === 'critic' && GREEN.has(kindOf(line))) book.greenHeads.add(greenKey(line));
+  if (who === 'critic' && isCriticGreen(line) && greenHeadSha(line)) book.greenHeads.add(greenKey(line));
 }
 
 // Assignee, then owner. classifyBatch and allowWake both use this, so a review
@@ -123,11 +163,14 @@ export function allowWake(config, seat, line, ctx) {
   if (/^nudge L\d/i.test(String(line.reason || ''))) return { allow: true };
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
-  if (kind === 'ci_fail' && (!ctx.owner || ctx.owner === who) && currentHead(line, ctx.head)) return { allow: true };
-  // Seat comments still reach the gate, so the breaker and the repeat rules stay as they are.
-  if (COMMENT.has(kind) || kind === 'needs_human') return { allow: true };
-  if (who === 'critic' && GREEN.has(kind) && greenOpen(state, line)) return { allow: true };
-  if (who === 'critic' && GREEN.has(kind)) return { allow: false, reason: 'filter' };
+  if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head)) return { allow: true };
+  if (kind === 'needs_human') return { allow: true };
+  if (who === 'critic' && isCriticGreen(line)) {
+    const sha = greenHeadSha(line);
+    const head = String(ctx.head || '').trim().toLowerCase();
+    if (!sha || (head && !(sha === head || head.startsWith(sha) || sha.startsWith(head)))) return { allow: false, reason: 'filter' };
+    return greenOpen(state, line) ? { allow: true } : { allow: false, reason: 'filter' };
+  }
   if (assignedR(line, who)) return { allow: true };
   return { allow: false, reason: 'filter' };
 }
