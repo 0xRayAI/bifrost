@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode } from '../wake-filter.mjs';
+import { createBatch } from '../pr-batch.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -68,6 +69,90 @@ test('near or mill get an R assignment, and a green head does not wake', () => {
   assert.equal(allowWake(on, 'mill', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'near', line({ type: 'pr_open', raci: 'R=near A=forge' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, false);
+});
+
+test('critic wakes once when every check is green, and a partial head stays quiet', () => {
+  const full = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const short = full.slice(0, 12);
+  const runs = [
+    { kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' },
+    { kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'success' },
+  ];
+  const suite = { kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' };
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha: short, head_sha: full };
+  assert.equal(criticGreenLine(ev, [suite], {}), null);
+  assert.equal(criticGreenLine(ev, runs, {}), null);
+  assert.equal(criticGreenLine(ev, [runs[0], { ...runs[1], status: 'in_progress', conclusion: '' }, suite], {}), null);
+  assert.equal(criticGreenLine(ev, [runs[0], { ...runs[1], conclusion: 'failure' }, suite], {}), null);
+  assert.equal(criticGreenLine(ev, [...runs, { ...suite, conclusion: 'failure' }], {}), null);
+  const ping = criticGreenLine(ev, [...runs, suite], {});
+  assert.equal(ping.sha, full);
+  assert.equal(ping.seat, 'critic');
+  const state = createWakeState();
+  assert.equal(allowWake(on, 'critic', ping, ctx({ state })).allow, true);
+  commitWake(state, 'critic', ping, NOW);
+  assert.equal(allowWake(on, 'critic', { ...ping, sha: short }, ctx({ state })).allow, false);
+  const newer = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const again = criticGreenLine({ ...ev, sha: newer, head_sha: newer }, [...runs, suite], {});
+  assert.equal(allowWake(on, 'critic', again, ctx({ state })).allow, true);
+});
+
+test('the batch list stays quiet until every run and the suite are green', () => {
+  const batch = createBatch();
+  const repo = '0xRayAI/clearing';
+  const number = 28;
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const key = '0xrayai/clearing#28';
+  const ev = { repo, number, sha };
+  batch.observeCi({ ...ev, kind: 'workflow_run', name: 'ci', status: 'completed', conclusion: 'success' });
+  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}), null);
+  batch.observeCi({ ...ev, kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' });
+  batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'in_progress' });
+  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}), null);
+  batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'failure' });
+  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}), null);
+  batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'success' });
+  batch.observeCi({ ...ev, kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' });
+  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}).sha, sha);
+});
+
+test('a merged or closed pull does not wake critic', () => {
+  const checks = [
+    { kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' },
+    { kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' },
+  ];
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha: '3781168cc00a136b458ebdd97be1399ea195da29' };
+  assert.equal(criticGreenLine({ ...ev, merged: true }, checks, {}), null);
+  assert.equal(criticGreenLine({ ...ev, state: 'closed' }, checks, {}), null);
+  assert.equal(criticGreenLine({ ...ev, kind: 'merged' }, checks, {}), null);
+  assert.equal(criticGreenLine(ev, checks, { closed: true }), null);
+  const ping = criticGreenLine(ev, checks, {});
+  assert.equal(allowWake(on, 'critic', ping, ctx({ closed: true })).allow, false);
+});
+
+test('a seen green head survives a restart, and a short sha is the full sha', () => {
+  const full = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const short = full.slice(0, 12);
+  const checks = [
+    { kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' },
+    { kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' },
+  ];
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha: short };
+  const early = criticGreenLine(ev, checks, {});
+  assert.equal(early.sha, short);
+  const state = createWakeState();
+  commitWake(state, 'critic', early, NOW);
+  const later = criticGreenLine({ ...ev, sha: short, head_sha: full }, checks, {});
+  assert.equal(later.sha, full);
+  assert.equal(allowWake(on, 'critic', later, ctx({ state })).allow, false);
+  assert.equal(rememberGreen(state, later), true);
+  assert.equal(state.greenHeads[0].sha, full);
+  const disk = JSON.parse(JSON.stringify({ seatComments: {}, breaker: {}, greenHeads: dumpGreenHeads(state) }));
+  const fresh = createWakeState();
+  restoreGreenHeads(fresh, disk);
+  assert.equal(fresh.greenHeads[0].sha, full);
+  assert.equal(allowWake(on, 'critic', later, ctx({ state: fresh })).allow, false);
+  assert.equal(allowWake(on, 'critic', { ...later, sha: short, head_sha: '' }, ctx({ state: fresh })).allow, false);
 });
 
 test('a bare comment does not wake, and a review on the owed seat does', () => {

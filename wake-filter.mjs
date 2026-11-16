@@ -71,9 +71,115 @@ function assignedR(line, seat) {
   return new RegExp(`\\bR\\s*=\\s*${seat}\\b`, 'i').test(raci);
 }
 
+const SUCCESS = new Set(['success', 'passed', 'green']);
+const SUITE = new Set(['check_suite', 'workflow_run', 'ci_pass', 'ci_success']);
+const CLOSED = new Set(['merged', 'merge', 'pr_close', 'issue_close', 'pr_closed', 'issue_closed', 'closed']);
+const GREEN_REASON = 'CI green on current head';
+
 function slots(state) {
   if (!state.stationAt) state.stationAt = new Map();
+  if (!Array.isArray(state.greenHeads)) state.greenHeads = [];
   return state;
+}
+
+export function fullHeadSha(line) {
+  const found = [];
+  for (const key of ['head_sha', 'sha', 'head']) {
+    const sha = String(line && line[key] || '').trim().toLowerCase();
+    if (/^[0-9a-f]{7,40}$/.test(sha)) found.push(sha);
+  }
+  found.sort((a, b) => b.length - a.length);
+  return found[0] || '';
+}
+
+function sameSha(a, b) {
+  if (!a || !b || a.length < 7 || b.length < 7) return false;
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+function successDone(row) {
+  const conclusion = String(row && row.conclusion || '').toLowerCase();
+  const status = String(row && row.status || '').toLowerCase();
+  if (!SUCCESS.has(conclusion)) return false;
+  return !status || status === 'completed';
+}
+
+// Every check_run is done and successful, and a completed suite agrees.
+// A suite or a workflow by itself is not the head.
+export function checksAllGreen(checks) {
+  const list = (Array.isArray(checks) ? checks : []).filter(row => row && row.required !== false);
+  const runs = list.filter(row => String(row.kind || '') === 'check_run');
+  const suites = list.filter(row => SUITE.has(String(row.kind || '')));
+  if (!runs.length || !suites.length) return false;
+  return list.every(successDone);
+}
+
+export function lineClosed(line) {
+  if (!line) return false;
+  if (line.merged === true || line.closed === true) return true;
+  if (CLOSED.has(kindOf(line))) return true;
+  const state = String(line.state || line.pr_state || '').toLowerCase();
+  return state === 'closed' || state === 'merged';
+}
+
+function greenRow(line) {
+  const sha = fullHeadSha(line);
+  const repo = String(line && line.repo || '').trim().toLowerCase();
+  const n = Number(line && line.number);
+  if (!sha || !repo || !Number.isInteger(n) || n < 1) return null;
+  return { repo, number: n, sha };
+}
+
+export function greenSeen(state, line) {
+  const row = greenRow(line);
+  if (!row) return false;
+  return slots(state).greenHeads.some(item => item.repo === row.repo && item.number === row.number && sameSha(item.sha, row.sha));
+}
+
+export function rememberGreen(state, line) {
+  const row = greenRow(line);
+  if (!row) return false;
+  const rows = slots(state).greenHeads;
+  const hit = rows.find(item => item.repo === row.repo && item.number === row.number && sameSha(item.sha, row.sha));
+  if (!hit) {
+    rows.push(row);
+    return true;
+  }
+  if (row.sha.length > hit.sha.length) {
+    hit.sha = row.sha;
+    return true;
+  }
+  return false;
+}
+
+export function dumpGreenHeads(state) {
+  return slots(state).greenHeads.map(row => ({ repo: row.repo, number: row.number, sha: row.sha }));
+}
+
+export function restoreGreenHeads(state, dump) {
+  const rows = dump && Array.isArray(dump.greenHeads) ? dump.greenHeads : Array.isArray(dump) ? dump : [];
+  state.greenHeads = [];
+  for (const row of rows) rememberGreen(state, row);
+}
+
+export function criticGreenLine(ev, checks, opts = {}) {
+  if (!ev || opts.closed || lineClosed(ev)) return null;
+  if (!checksAllGreen(checks)) return null;
+  const row = greenRow(ev);
+  if (!row) return null;
+  return {
+    id: `wake:critic:${row.repo}#${row.number}:${row.sha}`,
+    t_ct: String(ev.t_ct || ''),
+    seat: 'critic',
+    type: 'ci_pass',
+    kind: 'ci_pass',
+    repo: String(ev.repo || '').trim(),
+    number: row.number,
+    sha: row.sha,
+    title: 'CI green',
+    url: String(ev.url || ev.source || `https://github.com/${row.repo}/pull/${row.number}`),
+    reason: GREEN_REASON,
+  };
 }
 
 function stationOpen(state, seat, now) {
@@ -81,12 +187,13 @@ function stationOpen(state, seat, now) {
   return !(prev && now - prev < HOUR_MS);
 }
 
-// The station hour lives on the wake state. A restart clears it.
+// The station hour lives on the wake state. Seen green heads are written with the breaker file.
 // Call this only after the gate sends or queues. A skip must leave the slot open.
 export function commitWake(state, seat, line, now) {
   const book = slots(state);
   const who = String(seat || '').toLowerCase();
   if (stationLine(line)) book.stationAt.set(who, now);
+  if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) rememberGreen(state, line);
 }
 
 // Assignee, then owner. classifyBatch and allowWake both use this, so a review
@@ -111,6 +218,10 @@ export function allowWake(config, seat, line, ctx) {
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
   if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head)) return { allow: true };
+  if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) {
+    if (ctx.closed || lineClosed(line) || !fullHeadSha(line) || greenSeen(state, line)) return { allow: false, reason: 'filter' };
+    return { allow: true };
+  }
   if (assignedR(line, who)) return { allow: true };
   return { allow: false, reason: 'filter' };
 }

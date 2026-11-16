@@ -23,7 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGith
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
-import { readWakeFilter, allowWake, owedSeat, commitWake } from './wake-filter.mjs';
+import { readWakeFilter, allowWake, owedSeat, commitWake, criticGreenLine, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -599,6 +599,7 @@ function offerLines(lines) {
     }
     const kept = allowWake(wakeFilterConfig(), seat, w.line, {
       now, state: wakeState, owner: ownerOfLine(w.line), head: headOfLine(w.line),
+      closed: itemClosed(w.line && w.line.repo, w.line && w.line.number),
     });
     if (!kept.allow) { recordSkip(seat, w.line, 'filter'); continue; }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
@@ -864,13 +865,18 @@ function persistWakeBreaker() {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     const file = path.join(STATE_DIR, 'wake-breaker.json');
-    fs.writeFileSync(file + '.tmp', JSON.stringify(dumpBreaker(wakeState)));
+    const body = dumpBreaker(wakeState);
+    body.greenHeads = dumpGreenHeads(wakeState);
+    fs.writeFileSync(file + '.tmp', JSON.stringify(body));
     fs.renameSync(file + '.tmp', file);
   } catch (e) { console.log('wake: breaker save failed ' + ((e && e.code) || 'write')); }
 }
 function loadWakeBreaker() {
-  try { restoreBreaker(wakeState, JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'wake-breaker.json'), 'utf8'))); }
-  catch { /* no breaker file yet */ }
+  try {
+    const dump = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'wake-breaker.json'), 'utf8'));
+    restoreBreaker(wakeState, dump);
+    restoreGreenHeads(wakeState, dump);
+  } catch { /* no breaker file yet */ }
 }
 Object.assign(wakeOkAt, readWakeOk(path.join(STATE_DIR, 'wake-ok.json')));
 const NUDGE_L1_MS = (Number(process.env.NUDGE_L1_S) || 3600) * 1000, NUDGE_L2_MS = (Number(process.env.NUDGE_L2_S) || 1800) * 1000;
@@ -1256,8 +1262,13 @@ function noteCi(ev) {
   const key = repo && Number.isInteger(n) ? repo + '#' + n : '';
   const out = batch.observeCi(ev, { attention: attentionNow(), busy: key ? batch.busy(key) || prBusy({ repo, number: n }) : false });
   const line = storeFlush(ev, out);
-  if (!line) return;
-  postSeatLines({ lines: [line] }, null);
+  const lines = [];
+  if (line) lines.push(line);
+  const ping = criticGreenLine(ev, key ? batch.checksOf(key) : [], { closed: itemClosed(repo, n) });
+  if (ping && !greenSeen(wakeState, ping)) lines.push(ping);
+  else if (ping && rememberGreen(wakeState, ev)) persistWakeBreaker();
+  if (!lines.length) return;
+  postSeatLines({ lines }, null);
 }
 function takeBatch(lines) {
   const kept = [];
