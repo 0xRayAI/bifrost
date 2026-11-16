@@ -1326,11 +1326,6 @@ footer a { color: var(--foot); }
     for (var gy = 0; gy < H; gy += 24) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
     // hub orbit
     orbit += L.orbitStep(lastDraw == null ? 0 : Math.min(250, nowWall - lastDraw), pings, reduced); lastDraw = nowWall;
-    ctx.fillStyle = cssVar('--hub-dust');
-    for (var n = 0; n < 40; n++) {
-      var ang = n / 40 * Math.PI * 2 + orbit, rr = 30 + (n % 6) * 12;
-      ctx.fillRect(L.HUB[0] + Math.cos(ang) * rr, L.HUB[1] + Math.sin(ang) * rr * 0.6, 1.5, 1.5);
-    }
     var span = L.PING_MS * speed;
     var hot = state.live ? L.activeSeats(flashes, nowWall, FLASH_MS, true)
       : L.activeSeats(L.recentItems(state.events, state.t, 2 * span), state.t, span, false);
@@ -1392,11 +1387,6 @@ footer a { color: var(--foot); }
       ctx.fillStyle = L.packetCore(light); ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 7); ctx.fill();
       if (pk.late) { ctx.font = '600 9px "JetBrains Mono", ui-monospace, monospace'; ctx.fillStyle = 'rgba(' + cssVar('--late') + ',.85)'; ctx.fillText('late', q[0] + 8, q[1] - 13); }
     }
-    // hub
-    ctx.fillStyle = cssVar('--hub-plate'); ctx.strokeStyle = cssVar('--hub-stroke'); ctx.lineWidth = 3;
-    roundRect(L.HUB[0] - 30, L.HUB[1] - 24, 60, 48, 8); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = cssVar('--hub-text'); ctx.font = 'bold ' + 16 * fs + 'px "Inter", system-ui, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('mesh', L.HUB[0], L.HUB[1]);
     // nodes
     var since = nowWall - t0Page;
     Object.keys(L.SATS).forEach(function (key, i) {

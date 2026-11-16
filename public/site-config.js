@@ -6,15 +6,15 @@
 (function (L) {
   'use strict';
   function reset(obj, next) { Object.keys(obj).forEach(function (k) { delete obj[k]; }); for (var k in next) obj[k] = next[k]; }
-  var ROLE = { blinky: 'chief of staff', critic: 'reviewer', forge: 'eng primary', arch1: 'outside party' };
+  var ROLE = { blinky: 'chief of staff', critic: 'reviewer', forge: 'eng primary', mill: 'implementer', near: 'NEAR scout', nibbler: 'feed scout', herald: 'outreach', arch1: 'outside party' };
   // The kit list is a template. The live roster replaces it when the feed arrives.
   L.AGENTS.splice(0, L.AGENTS.length);
   L.SEAT_NAMES.splice(0, L.SEAT_NAMES.length);
-  // 920 x 400 canvas: the three seats plus Arch1 on the top row, rails in the middle.
+  // 920 x 400 canvas: the active seats on the top row, rails in the middle, Arch1 and the cloud row at the bottom.
   // CloudAgents is the cursor cloud-agent circle (kit position). Pings land on it, not on GitHub.
-  reset(L.SATS, { blinky: [90, 55], critic: [250, 55], forge: [410, 55], arch1: [820, 55],
-    GitHub: [110, 200], Blaze: [300, 200], Railway: [690, 200], CloudAgents: [150, 330], Assistant: [840, 335] });
-  var C = { blinky: [88, 210, 180], critic: [255, 150, 90], forge: [255, 140, 70], arch1: [255, 120, 100],
+  reset(L.SATS, { blinky: [80, 55], critic: [205, 55], forge: [330, 55], mill: [455, 55], near: [580, 55], nibbler: [705, 55], herald: [830, 55],
+    GitHub: [110, 200], Blaze: [300, 200], Railway: [690, 200], CloudAgents: [150, 330], arch1: [500, 335], Assistant: [840, 335] });
+  var C = { blinky: [88, 210, 180], critic: [255, 150, 90], forge: [255, 140, 70], mill: [230, 190, 90], near: [120, 220, 140], nibbler: [190, 150, 240], herald: [240, 120, 180], arch1: [255, 120, 100],
     GitHub: [200, 210, 230], Blaze: [255, 120, 60], Railway: [170, 130, 255], CloudAgents: [130, 190, 255], Assistant: [116, 170, 156] };
   reset(L.COLOR, C);
   var RAIL = { GitHub: 1, Railway: 1, Blaze: 1, CloudAgents: 1, Assistant: 1, arch1: 1 };
@@ -22,7 +22,7 @@
   var LAB = { Blaze: 'Blaze', GitHub: 'GitHub', Railway: 'Railway', Assistant: 'Assistant', arch1: 'Arch1', CloudAgents: 'Cloud agents' };
   drawn.forEach(function (s) { LAB[s] = s; });
   reset(L.LABEL, LAB);
-  var SUB = { Blaze: 'owner', GitHub: 'PRs · commits · checks', Railway: 'deploys', Assistant: 'MCP calls', arch1: 'outside party', CloudAgents: 'cursor agents' };
+  var SUB = { Blaze: 'owner', GitHub: 'PRs · Issues', Railway: 'deploys', Assistant: 'MCP calls', arch1: 'outside party', CloudAgents: 'cursor agents' };
   drawn.forEach(function (s) { if (ROLE[s]) SUB[s] = ROLE[s]; });
   reset(L.SUB, SUB);
   reset(L.SQUARE, { GitHub: 1, Railway: 1 });
