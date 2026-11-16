@@ -1,6 +1,6 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
+import { createWakeState, gateLine, noteSent, recordFlush, viewLine, wakeConfig } from '../wake-gate.mjs';
 import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen, assignCloudRaci } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
@@ -43,7 +43,7 @@ test('a review or a current-head ci_fail wakes only the owner', () => {
   assert.equal(allowWake(on, 'forge', line({ type: 'critic_fail', sha: 'abc123' }), own).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'critic_fail', sha: 'abc123' }), own).allow, false);
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'abc123' }), own).allow, true);
-  assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'old' }), own).allow, false);
+  assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'old', t_ct: new Date(NOW - 60000).toISOString() }), ctx({ owner: 'forge', head: 'abc123', headAt: NOW })).allow, false);
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'abc123', conclusion: 'cancelled' }), own).allow, false);
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail' }), ctx({ owner: 'forge', head: '' })).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: '' }), ctx({ owner: 'forge', head: 'abc123' })).allow, true);
@@ -66,20 +66,105 @@ test('a delivered line, a stale head, and a merged pull do not wake; the current
   const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
   const state = createWakeState();
   const repo = '0xRayAI/xray';
-  const live = line({ id: 'wake:forge:xray#1170:' + sha, type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha });
-  const current = ctx({ state, owner: 'forge', head: sha, closed: false });
+  const live = line({ id: 'wake:forge:xray#1170:' + sha, type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha, run_id: 42, t_ct: new Date(NOW).toISOString() });
+  const current = ctx({ state, owner: 'forge', head: sha, headAt: NOW, closed: false });
   assert.equal(allowWake(on, 'forge', live, current).allow, true);
   commitWake(state, 'forge', live, NOW);
+  assert.equal(recordFlush(state, 'forge', [live], { ok: true, outcome: 'delivered' }, NOW), true);
   assert.equal(allowWake(on, 'forge', live, current).allow, false);
-  const sameKey = line({ id: 'wake:forge:xray#1170:again', type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha });
+  const sameKey = line({ id: 'wake:forge:xray#1170:again', type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha, run_id: 42, t_ct: new Date(NOW).toISOString() });
   assert.equal(allowWake(on, 'forge', sameKey, current).allow, false);
-  const stale = line({ id: 'wake:forge:xray#1166:old', type: 'ci_fail', kind: 'ci_fail', repo, number: 1166, sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
-  assert.equal(allowWake(on, 'forge', stale, ctx({ state, owner: 'forge', head: sha })).allow, false);
+  const stale = line({ id: 'wake:forge:xray#1166:old', type: 'ci_fail', kind: 'ci_fail', repo, number: 1166, sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', t_ct: new Date(NOW - 60000).toISOString() });
+  assert.equal(allowWake(on, 'forge', stale, ctx({ state, owner: 'forge', head: sha, headAt: NOW })).allow, false);
   const merged = line({ id: 'wake:critic:xray#1154:' + sha, type: 'ci_pass', kind: 'ci_pass', repo, number: 1154, sha, reason: 'CI green on current head' });
-  assert.equal(allowWake(on, 'critic', merged, ctx({ state, head: sha, closed: true })).allow, false);
-  const open = line({ id: 'wake:forge:xray#1168:' + sha, type: 'ci_fail', kind: 'ci_fail', repo, number: 1168, sha });
-  assert.equal(allowWake(on, 'forge', open, ctx({ state, owner: 'forge', head: sha, closed: false })).allow, true);
+  assert.equal(allowWake(on, 'critic', merged, ctx({ state, head: sha, headAt: NOW, closed: true })).allow, false);
+  const open = line({ id: 'wake:forge:xray#1168:' + sha, type: 'ci_fail', kind: 'ci_fail', repo, number: 1168, sha, t_ct: new Date(NOW).toISOString() });
+  assert.equal(allowWake(on, 'forge', open, ctx({ state, owner: 'forge', head: sha, headAt: NOW, closed: false })).allow, true);
   commitWake(state, 'forge', open, NOW);
+  recordFlush(state, 'forge', [open], { ok: true, outcome: 'delivered' }, NOW);
+});
+
+test('a failed flush leaves the line wakeable and a successful flush marks it', () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = createWakeState();
+  const repo = '0xRayAI/xray';
+  const live = line({ id: 'wake:forge:fail', type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha, run_id: 7, t_ct: new Date(NOW).toISOString() });
+  const view = ctx({ state, owner: 'forge', head: sha, headAt: NOW, closed: false });
+  assert.equal(allowWake(on, 'forge', live, view).allow, true);
+  commitWake(state, 'forge', live, NOW);
+  assert.equal(recordFlush(state, 'forge', [live], { ok: false, outcome: 'failed' }, NOW), false);
+  assert.equal(allowWake(on, 'forge', live, view).allow, true);
+  commitWake(state, 'forge', live, NOW);
+  assert.equal(recordFlush(state, 'forge', [viewLine(live)], { ok: true, outcome: 'delivered' }, NOW), true);
+  assert.equal(allowWake(on, 'forge', live, view).allow, false);
+});
+
+test('a push that lands before the card head moves still wakes', () => {
+  const oldSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = createWakeState();
+  const repo = '0xRayAI/xray';
+  const push = line({ id: 'push-new', type: 'ci_fail', kind: 'ci_fail', repo, number: 1166, sha, run_id: 3, t_ct: new Date(NOW).toISOString() });
+  const early = ctx({ state, owner: 'forge', head: oldSha, headAt: NOW - 60000, closed: false });
+  assert.equal(allowWake(on, 'forge', push, early).allow, true);
+  commitWake(state, 'forge', push, NOW);
+  assert.equal(recordFlush(state, 'forge', [push], { ok: true, outcome: 'delivered' }, NOW), true);
+  const behind = line({ id: 'push-old', type: 'ci_fail', kind: 'ci_fail', repo, number: 1166, sha: oldSha, run_id: 1, t_ct: new Date(NOW - 120000).toISOString() });
+  assert.equal(allowWake(on, 'forge', behind, ctx({ state, owner: 'forge', head: sha, headAt: NOW })).allow, false);
+  const unsure = line({ id: 'push-unsure', type: 'ci_fail', kind: 'ci_fail', repo, number: 1166, sha: oldSha, run_id: 2 });
+  assert.equal(allowWake(on, 'forge', unsure, ctx({ state, owner: 'forge', head: sha })).allow, true);
+});
+
+test('a same-sha re-run and a force-back still wake', () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = createWakeState();
+  const repo = '0xRayAI/xray';
+  const first = line({ id: 'ci-run-1', type: 'ci_fail', kind: 'ci_fail', repo, number: 1171, sha, run_attempt: 1, t_ct: new Date(NOW).toISOString() });
+  const view = ctx({ state, owner: 'forge', head: sha, headAt: NOW, closed: false });
+  assert.equal(allowWake(on, 'forge', first, view).allow, true);
+  commitWake(state, 'forge', first, NOW);
+  assert.equal(recordFlush(state, 'forge', [first], { ok: true, outcome: 'delivered' }, NOW), true);
+  const again = line({ id: 'ci-run-2', type: 'ci_fail', kind: 'ci_fail', repo, number: 1171, sha, run_attempt: 2, t_ct: new Date(NOW).toISOString() });
+  assert.equal(allowWake(on, 'forge', again, view).allow, true);
+  const same = line({ id: 'ci-run-1b', type: 'ci_fail', kind: 'ci_fail', repo, number: 1171, sha, run_attempt: 1, t_ct: new Date(NOW).toISOString() });
+  assert.equal(allowWake(on, 'forge', same, view).allow, false);
+  const back = line({ id: 'force-2', type: 'pr_force_push', kind: 'pr_force_push', repo, number: 1171, sha, t_ct: new Date(NOW).toISOString() });
+  const prior = line({ id: 'force-1', type: 'pr_force_push', kind: 'pr_force_push', repo, number: 1171, sha, t_ct: new Date(NOW - 1000).toISOString() });
+  commitWake(state, 'forge', prior, NOW);
+  recordFlush(state, 'forge', [prior], { ok: true, outcome: 'delivered' }, NOW);
+  const all = readWakeFilter({ SEAT_WAKE_FILTER: 'all' });
+  assert.equal(allowWake(all, 'forge', back, view).allow, true);
+  assert.equal(allowWake(all, 'forge', prior, view).allow, false);
+});
+
+test('a closed pull still wakes review and deploy, and a reopen clears that book', () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = createWakeState();
+  const repo = '0xRayAI/xray';
+  const closed = ctx({ state, owner: 'forge', head: sha, headAt: NOW, closed: true });
+  const review = line({ id: 'rev-1', type: 'review', kind: 'review', repo, number: 1154, sha, title: 'LGTM' });
+  assert.equal(allowWake(on, 'forge', review, closed).allow, true);
+  commitWake(state, 'forge', review, NOW);
+  assert.equal(recordFlush(state, 'forge', [review], { ok: true, outcome: 'delivered' }, NOW), true);
+  assert.equal(allowWake(on, 'forge', review, closed).allow, false);
+  const deploy = line({ id: 'dep-1', type: 'deploy', kind: 'deploy', repo, number: 1154, sha });
+  assert.equal(allowWake(on, 'forge', deploy, closed).allow, true);
+  const ci = line({ id: 'ci-closed', type: 'ci_fail', kind: 'ci_fail', repo, number: 1154, sha, run_id: 9, t_ct: new Date(NOW).toISOString() });
+  assert.equal(allowWake(on, 'forge', ci, closed).allow, false);
+  const live = ctx({ state, owner: 'forge', head: sha, headAt: NOW, closed: false });
+  const openCi = line({ id: 'ci-open', type: 'ci_fail', kind: 'ci_fail', repo, number: 1154, sha, run_id: 8, t_ct: new Date(NOW).toISOString() });
+  assert.equal(allowWake(on, 'forge', openCi, live).allow, true);
+  commitWake(state, 'forge', openCi, NOW);
+  recordFlush(state, 'forge', [openCi], { ok: true, outcome: 'delivered' }, NOW);
+  assert.equal(allowWake(on, 'forge', openCi, live).allow, false);
+  const other = line({ id: 'ci-other', type: 'ci_fail', kind: 'ci_fail', repo, number: 1160, sha, run_id: 4, t_ct: new Date(NOW).toISOString() });
+  commitWake(state, 'forge', other, NOW);
+  recordFlush(state, 'forge', [other], { ok: true, outcome: 'delivered' }, NOW);
+  const reopen = line({ id: 're-1', type: 'pr_reopen', kind: 'pr_reopen', repo, number: 1154 });
+  assert.equal(allowWake(on, 'forge', reopen, closed).allow, true);
+  assert.equal(allowWake(on, 'forge', openCi, live).allow, true);
+  assert.equal(allowWake(on, 'forge', review, closed).allow, true);
+  assert.equal(allowWake(on, 'forge', other, ctx({ state, owner: 'forge', head: sha, headAt: NOW })).allow, false);
 });
 
 test('a builder-cloud card gives mill R and forge A', () => {
@@ -364,7 +449,7 @@ test('a ci_fail wakes only the owed seat on the current head', () => {
   const owed = ctx({ owner: 'mill', head: 'abc123' });
   assert.equal(allowWake(on, 'mill', line({ type: 'ci_fail', sha: 'abc123' }), owed).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'abc123' }), owed).allow, false);
-  assert.equal(allowWake(on, 'mill', line({ type: 'ci_fail', sha: 'oldhead' }), owed).allow, false);
+  assert.equal(allowWake(on, 'mill', line({ type: 'ci_fail', sha: 'oldhead', t_ct: new Date(NOW - 60000).toISOString() }), ctx({ owner: 'mill', head: 'abc123', headAt: NOW })).allow, false);
 });
 
 test('a ladder nudge and the stall clock still wake', () => {
