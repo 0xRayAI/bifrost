@@ -13,3 +13,11 @@ test('header .fleet uses margin-left 0', () => {
   assert.match(rule[0], /margin-left:\s*0/);
   assert.doesNotMatch(rule[0], /margin-left:\s*auto/);
 });
+
+test('a narrow header gives .fleet its own row so the line can wrap', () => {
+  const query = html.match(/@media \(max-width:\s*720px\)\s*\{[\s\S]*?\.fleet \{([^}]+)\}/);
+  assert.ok(query, 'missing 720px .fleet rule');
+  assert.match(query[1], /flex:\s*1\s+1\s+100%/);
+  assert.match(query[1], /min-width:\s*0/);
+  assert.match(query[1], /white-space:\s*normal/);
+});

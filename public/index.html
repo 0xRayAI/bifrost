@@ -606,7 +606,7 @@ button:hover { border-color: var(--control-hover); }
 footer { color: var(--dim); font-size: 12px; }
 footer a { color: var(--foot); }
 @media (max-width: 720px) {
-  .fleet { white-space: normal; }
+  .fleet { flex: 1 1 100%; min-width: 0; white-space: normal; }
   .wave-stats { grid-template-columns: repeat(3, 1fr); }
   #log li { grid-template-columns: 12ch 1fr; }
   #log .who { display: none; }
