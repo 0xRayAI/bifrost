@@ -65,7 +65,7 @@
     'mymuse.house': 'Product', blinky: 'Coord', Assistant: 'Assistant / emitter' });
   reset(L.SUB, { CloudAgents: 'cursor agents', Builder: 'builder', 'Builder-cloud': 'builder (cloud)', Reviewer: 'gate', Tester: 'lab tester', QA: 'qa-one · qa two',
     Operator: 'infra', Lead: 'Architect', X: 'other actors',
-    GitHub: 'PRs · commits · checks', Railway: 'deploys', 'mymuse.house': 'dev · labtest · prod', blinky: 'Coordinator', Assistant: 'MCP tool calls' });
+    GitHub: 'PRs · Issues', Railway: 'deploys', 'mymuse.house': 'dev · labtest · prod', blinky: 'Coordinator', Assistant: 'MCP tool calls' });
   reset(L.GLYPH, {});
   reset(L.SQUARE, { GitHub: 1, Railway: 1 });
   L.EDGES.splice(0, L.EDGES.length, ['Builder', 'GitHub'], ['Builder-cloud', 'GitHub'], ['Lead', 'GitHub'],

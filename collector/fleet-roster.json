@@ -1,12 +1,40 @@
 {
-  "seats": ["blinky", "critic", "forge", "herald", "magnet", "nibbler", "sound", "arch1"],
-  "board": ["blinky", "critic", "forge"],
-  "outside": ["arch1"],
-  "parked": ["herald", "magnet", "nibbler", "sound"],
+  "seats": [
+    "blinky",
+    "critic",
+    "forge",
+    "mill",
+    "near",
+    "nibbler",
+    "herald",
+    "magnet",
+    "sound",
+    "arch1"
+  ],
+  "board": [
+    "blinky",
+    "critic",
+    "forge",
+    "mill",
+    "near",
+    "nibbler",
+    "herald"
+  ],
+  "outside": [
+    "arch1"
+  ],
+  "parked": [
+    "magnet",
+    "sound"
+  ],
   "roles": {
     "blinky": "chief of staff",
     "critic": "reviewer",
     "forge": "eng primary",
-    "arch1": "outside party"
+    "arch1": "outside party",
+    "mill": "implementer",
+    "near": "NEAR scout",
+    "nibbler": "feed scout",
+    "herald": "outreach"
   }
 }
