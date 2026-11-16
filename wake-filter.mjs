@@ -105,13 +105,69 @@ function successDone(row) {
 }
 
 // Every check_run is done and successful, and a completed suite agrees.
-// A suite or a workflow by itself is not the head.
+// A suite or a workflow by itself is not the head. A missing row is not success.
 export function checksAllGreen(checks) {
   const list = (Array.isArray(checks) ? checks : []).filter(row => row && row.required !== false);
   const runs = list.filter(row => String(row.kind || '') === 'check_run');
   const suites = list.filter(row => SUITE.has(String(row.kind || '')));
   if (!runs.length || !suites.length) return false;
   return list.every(successDone);
+}
+
+function ghWord(value) {
+  if (value == null) return '';
+  return String(value).trim().toLowerCase();
+}
+
+// The collector's read token. A missing page, a short page, or a failed read is not a green head.
+export async function githubHeadChecks(repo, sha, opts = {}) {
+  const token = String(opts.token || '').trim();
+  const fetchImpl = opts.fetch || globalThis.fetch;
+  const api = String(opts.api || 'https://api.github.com').replace(/\/$/, '');
+  const parts = String(repo || '').trim().split('/');
+  const head = String(sha || '').trim().toLowerCase();
+  if (!token || parts.length !== 2 || !parts[0] || !parts[1] || !/^[0-9a-f]{7,40}$/.test(head)) return null;
+  if (typeof fetchImpl !== 'function') return null;
+  const headers = {
+    Authorization: 'Bearer ' + token,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'live-board-feed',
+  };
+  const read = async (path) => {
+    let res;
+    try {
+      res = await fetchImpl(api + path, { headers, signal: AbortSignal.timeout(15000) });
+    } catch {
+      return null;
+    }
+    if (!res || !res.ok) return null;
+    try { return await res.json(); } catch { return null; }
+  };
+  const root = `/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/commits/${head}`;
+  const [runsBody, suitesBody] = await Promise.all([
+    read(root + '/check-runs?per_page=100'),
+    read(root + '/check-suites?per_page=100'),
+  ]);
+  if (!runsBody || !suitesBody) return null;
+  const runs = Array.isArray(runsBody.check_runs) ? runsBody.check_runs : null;
+  const suites = Array.isArray(suitesBody.check_suites) ? suitesBody.check_suites : null;
+  if (!runs || !suites || !runs.length) return null;
+  if (Number(runsBody.total_count) !== runs.length || Number(suitesBody.total_count) !== suites.length) return null;
+  return [
+    ...runs.map(row => ({
+      kind: 'check_run',
+      name: String(row && row.name || ''),
+      status: ghWord(row && row.status),
+      conclusion: ghWord(row && row.conclusion),
+    })),
+    ...suites.map(row => ({
+      kind: 'check_suite',
+      name: String(row && row.app && row.app.slug || 'suite'),
+      status: ghWord(row && row.status),
+      conclusion: ghWord(row && row.conclusion),
+    })),
+  ];
 }
 
 export function lineClosed(line) {

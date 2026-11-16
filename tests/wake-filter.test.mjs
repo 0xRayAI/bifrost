@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
 import { createBatch } from '../pr-batch.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen } from '../wake-filter.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadChecks } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -114,6 +114,23 @@ test('the batch list stays quiet until every run and the suite are green', () =>
   batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'success' });
   batch.observeCi({ ...ev, kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' });
   assert.equal(criticGreenLine(ev, batch.checksOf(key), {}).sha, sha);
+});
+
+test('one green check does not wake while another has not reported', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const fetchImpl = async (url) => {
+    if (String(url).includes('/check-runs')) {
+      return { ok: true, json: async () => ({ total_count: 2, check_runs: [
+        { name: 'unit', status: 'completed', conclusion: 'success' },
+        { name: 'lint', status: 'queued', conclusion: null },
+      ] }) };
+    }
+    return { ok: true, json: async () => ({ total_count: 1, check_suites: [
+      { app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' },
+    ] }) };
+  };
+  const checks = await githubHeadChecks('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl });
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, checks, {}), null);
 });
 
 test('a merged or closed pull does not wake critic', () => {
