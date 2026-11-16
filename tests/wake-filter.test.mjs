@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns } from '../wake-filter.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -200,6 +200,49 @@ test('a failed attempt does not block the successful re-run', async () => {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].run_attempt, 2);
   assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, runs, {}).sha, sha);
+});
+
+test('noteCi retries a pending sha after the gap and wakes once', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  try {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      const done = calls > 1;
+      return { ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
+        { name: 'A', workflow_id: 1, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'success' },
+        { name: 'B', workflow_id: 2, event: 'pull_request', run_attempt: 1, status: done ? 'completed' : 'in_progress', conclusion: done ? 'success' : null },
+      ] }) };
+    };
+    const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+    const wake = createWakeState();
+    const wakes = [];
+    const heads = createCriticHeads({
+      state: { fetched: new Map(), quietUntil: 0, deniedLogged: false },
+      token: () => 'ghs_test',
+      api: () => 'https://api.github.com',
+      fetch: fetchImpl,
+      seen: (repo, n, head) => greenSeen(wake, { repo, number: n, sha: head }),
+      deliver: (ping) => { wakes.push(ping); rememberGreen(wake, ping); },
+    });
+    const ev = { repo: '0xRayAI/clearing', number: 28, sha, kind: 'ci_pass' };
+    await heads.noteCi(ev, 28);
+    assert.equal(wakes.length, 0);
+    assert.equal(calls, 1);
+    await heads.noteCi({ ...ev, name: 'B' }, 28);
+    assert.equal(wakes.length, 0);
+    assert.equal(calls, 1);
+    mock.timers.tick(60_000);
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(wakes.length, 1);
+    assert.equal(calls, 2);
+    mock.timers.tick(60_000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(wakes.length, 1);
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test('a merged or closed pull does not wake critic', () => {

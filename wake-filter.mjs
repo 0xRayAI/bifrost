@@ -229,6 +229,93 @@ export async function githubHeadRuns(repo, sha, opts = {}) {
   return job;
 }
 
+const RETRY_CAP = 30;
+const RETRY_WINDOW_MS = 30 * 60 * 1000;
+
+function headKey(repo, sha) {
+  const parts = String(repo || '').trim().split('/');
+  return `${parts[0]}/${parts[1]}@${String(sha || '').trim().toLowerCase()}`.toLowerCase();
+}
+
+// noteCi only runs when the feed changes. A pending sha retries on its own timer.
+export function createCriticHeads(opts) {
+  const state = opts.state;
+  const timers = new Map();
+  const book = new Map();
+  const dropped = new Set();
+  const setTimer = opts.setTimeout || globalThis.setTimeout;
+  const clearTimer = opts.clearTimeout || globalThis.clearTimeout;
+
+  function drop(key) {
+    const timer = timers.get(key);
+    if (timer) clearTimer(timer);
+    timers.delete(key);
+    book.delete(key);
+    if (state.retryAt) state.retryAt.delete(key);
+  }
+
+  function clearOtherHeads(repo, number, sha) {
+    const repoName = String(repo || '').toLowerCase();
+    for (const [key, row] of book) {
+      if (row.number === number && row.sha !== sha && String(row.repo || '').toLowerCase() === repoName) drop(key);
+    }
+  }
+
+  function arm(key, ev, n, now) {
+    let row = book.get(key);
+    if (!row) row = { tries: 0, started: now, ev, n, repo: ev.repo, sha: fullHeadSha(ev), logged: false };
+    row.tries += 1;
+    row.ev = ev;
+    if (row.tries > RETRY_CAP || now - row.started >= RETRY_WINDOW_MS) {
+      if (!row.logged && typeof opts.log === 'function') opts.log('wake: actions runs retry dropped');
+      dropped.add(key);
+      drop(key);
+      return;
+    }
+    book.set(key, row);
+    if (timers.has(key)) return;
+    const when = state.retryAt && state.retryAt.get(key);
+    const delay = Math.max(0, (when || now + RERUN_MS) - now);
+    const timer = setTimer(() => {
+      timers.delete(key);
+      void noteCi(row.ev, row.n);
+    }, delay);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    timers.set(key, timer);
+  }
+
+  async function noteCi(ev, n) {
+    const token = String(opts.token ? opts.token() : '').trim();
+    if (!token) return null;
+    const repo = String(ev && ev.repo || '').trim();
+    const sha = fullHeadSha(ev);
+    const number = Number(n);
+    if (!repo || !sha || !Number.isInteger(number)) return null;
+    const key = headKey(repo, sha);
+    if (dropped.has(key)) return null;
+    clearOtherHeads(repo, number, sha);
+    if (typeof opts.closed === 'function' && opts.closed(repo, number, ev)) { drop(key); return null; }
+    if (typeof opts.seen === 'function' && opts.seen(repo, number, sha)) { drop(key); return null; }
+    const prior = state.retryAt && state.retryAt.get(key);
+    const now = typeof opts.now === 'function' ? opts.now() : Date.now();
+    const runs = await githubHeadRuns(repo, sha, {
+      token, api: opts.api ? opts.api() : undefined, state, log: opts.log, fetch: opts.fetch, now,
+    });
+    if (runs && runsAllGreen(runs)) {
+      drop(key);
+      const ping = criticGreenLine(ev, runs, {});
+      if (ping && typeof opts.deliver === 'function') opts.deliver(ping);
+      return ping;
+    }
+    const gapSkip = prior != null && state.retryAt && state.retryAt.get(key) === prior && now < prior && runs == null;
+    if (gapSkip || (state.quietUntil && now < state.quietUntil)) return null;
+    arm(key, ev, number, now);
+    return null;
+  }
+
+  return { noteCi };
+}
+
 export function lineClosed(line) {
   if (!line) return false;
   if (line.merged === true || line.closed === true) return true;

@@ -23,7 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGith
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
-import { readWakeFilter, allowWake, owedSeat, commitWake, criticGreenLine, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, githubHeadRuns, fullHeadSha, lineClosed } from './wake-filter.mjs';
+import { readWakeFilter, allowWake, owedSeat, commitWake, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -1257,6 +1257,19 @@ function storeFlush(src, out) {
   return line;
 }
 const actionRuns = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+const actionHeadRetry = createCriticHeads({
+  state: actionRuns,
+  token: () => String(process.env.GITHUB_READ_TOKEN || '').trim(),
+  api: () => GITHUB_API,
+  closed: (repo, n, ev) => itemClosed(repo, n) || lineClosed(ev),
+  seen: (repo, n, sha) => greenSeen(wakeState, { repo, number: n, sha }),
+  log: (line) => console.log(line),
+  deliver: (ping) => {
+    if (!ping) return;
+    if (!greenSeen(wakeState, ping)) postSeatLines({ lines: [ping] }, null);
+    else if (rememberGreen(wakeState, ping)) persistWakeBreaker();
+  },
+});
 function noteCi(ev) {
   const repo = String(ev && ev.repo || '').toLowerCase();
   const n = Number(ev && ev.number);
@@ -1264,22 +1277,7 @@ function noteCi(ev) {
   const out = batch.observeCi(ev, { attention: attentionNow(), busy: key ? batch.busy(key) || prBusy({ repo, number: n }) : false });
   const line = storeFlush(ev, out);
   if (line) postSeatLines({ lines: [line] }, null);
-  void criticHeadWake(ev, n);
-}
-async function criticHeadWake(ev, n) {
-  const token = String(process.env.GITHUB_READ_TOKEN || '').trim();
-  if (!token) return;
-  const repo = String(ev && ev.repo || '').trim();
-  const sha = fullHeadSha(ev);
-  if (!repo || !sha || !Number.isInteger(n)) return;
-  if (itemClosed(repo, n) || lineClosed(ev)) return;
-  if (greenSeen(wakeState, { repo, number: n, sha })) return;
-  const runs = await githubHeadRuns(repo, sha, {
-    token, api: GITHUB_API, state: actionRuns, log: (line) => console.log(line),
-  });
-  const ping = criticGreenLine(ev, runs || [], {});
-  if (ping && !greenSeen(wakeState, ping)) postSeatLines({ lines: [ping] }, null);
-  else if (ping && rememberGreen(wakeState, ev)) persistWakeBreaker();
+  void actionHeadRetry.noteCi(ev, n);
 }
 function takeBatch(lines) {
   const kept = [];
