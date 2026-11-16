@@ -5,8 +5,6 @@
 
 const HOUR_MS = 60 * 60 * 1000;
 const REVIEW = new Set(['review', 'critic_pass', 'critic_fail', 'verdict']);
-const GREEN = new Set(['ci_pass', 'ci_success', 'ready', 'live_pass']);
-const SUITE = new Set(['check_suite', 'workflow_run', 'commit_status', 'status']);
 const DIRECT = new Set(['dispatch', 'packet', 'handoff', 'start_after']);
 const ROUTED = new Set(['near', 'mill']);
 
@@ -73,54 +71,8 @@ function assignedR(line, seat) {
   return new RegExp(`\\bR\\s*=\\s*${seat}\\b`, 'i').test(raci);
 }
 
-export function greenHeadSha(line) {
-  return String(line && (line.sha || line.head_sha || line.head) || '').trim().toLowerCase();
-}
-
-function greenWord(line) {
-  return `${line && line.conclusion || ''} ${line && line.status || ''} ${line && line.state || ''}`.toLowerCase();
-}
-
-// A finished green suite. A single check_run is not the head.
-export function isCriticGreen(line) {
-  const kind = kindOf(line);
-  if (GREEN.has(kind)) return true;
-  if (!SUITE.has(kind)) return false;
-  const word = greenWord(line);
-  if (/\b(failure|failed|fail|error|cancelled|canceled|cancel|timed_out|pending|queued|in_progress)\b/.test(word)) return false;
-  return /\b(success|passed|green)\b/.test(word);
-}
-
-function greenKey(line) {
-  const repo = String(line && line.repo || '').toLowerCase();
-  const n = Number(line && line.number) || 0;
-  return `${repo}#${n}|${greenHeadSha(line)}`;
-}
-
-export function criticGreenLine(ev) {
-  if (!isCriticGreen(ev)) return null;
-  const sha = greenHeadSha(ev);
-  const repo = String(ev && ev.repo || '').trim();
-  const n = Number(ev && ev.number);
-  if (!sha || sha.length < 7 || !repo || !Number.isInteger(n) || n < 1) return null;
-  return {
-    id: `wake:critic:${repo.toLowerCase()}#${n}:${sha}`,
-    t_ct: String(ev.t_ct || ''),
-    seat: 'critic',
-    type: 'ci_pass',
-    kind: 'ci_pass',
-    repo,
-    number: n,
-    sha,
-    title: 'CI green',
-    url: String(ev.url || ev.source || `https://github.com/${repo}/pull/${n}`),
-    reason: 'CI green on current head',
-  };
-}
-
 function slots(state) {
   if (!state.stationAt) state.stationAt = new Map();
-  if (!state.greenHeads) state.greenHeads = new Set();
   return state;
 }
 
@@ -129,17 +81,12 @@ function stationOpen(state, seat, now) {
   return !(prev && now - prev < HOUR_MS);
 }
 
-function greenOpen(state, line) {
-  return !slots(state).greenHeads.has(greenKey(line));
-}
-
-// The hour and the green head live on the wake state. A restart clears both.
+// The station hour lives on the wake state. A restart clears it.
 // Call this only after the gate sends or queues. A skip must leave the slot open.
 export function commitWake(state, seat, line, now) {
   const book = slots(state);
   const who = String(seat || '').toLowerCase();
   if (stationLine(line)) book.stationAt.set(who, now);
-  if (who === 'critic' && isCriticGreen(line) && greenHeadSha(line)) book.greenHeads.add(greenKey(line));
 }
 
 // Assignee, then owner. classifyBatch and allowWake both use this, so a review
@@ -164,13 +111,6 @@ export function allowWake(config, seat, line, ctx) {
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
   if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head)) return { allow: true };
-  if (kind === 'needs_human') return { allow: true };
-  if (who === 'critic' && isCriticGreen(line)) {
-    const sha = greenHeadSha(line);
-    const head = String(ctx.head || '').trim().toLowerCase();
-    if (!sha || (head && !(sha === head || head.startsWith(sha) || sha.startsWith(head)))) return { allow: false, reason: 'filter' };
-    return greenOpen(state, line) ? { allow: true } : { allow: false, reason: 'filter' };
-  }
   if (assignedR(line, who)) return { allow: true };
   return { allow: false, reason: 'filter' };
 }
