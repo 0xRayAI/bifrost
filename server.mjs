@@ -23,6 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGith
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
+import { readWakeFilter, allowWake, owedSeat, commitWake } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -428,13 +429,27 @@ function recordSkip(seat, line, reason) {
   } catch (e) { console.log('wake: skip append failed ' + ((e && e.code) || 'write')); }
   console.log(`wake: skip ${row.seat || '-'} ${reason} ${row.id}`);
 }
-function ownerOfLine(line) {
+function cardOfLine(line) {
   const repo = String(line && line.repo || '').toLowerCase();
   const n = Number(line && line.number);
-  if (!repo || !Number.isInteger(n)) return '';
-  const card = bfCards.find(c => c && String(c.repo || '').toLowerCase() === repo && Number(c.number) === n);
+  if (!repo || !Number.isInteger(n)) return null;
+  return bfCards.find(c => c && String(c.repo || '').toLowerCase() === repo && Number(c.number) === n) || null;
+}
+function ownerOfLine(line) {
+  return owedSeat(cardOfLine(line), seatIdOf);
+}
+function headOfLine(line) {
+  const card = cardOfLine(line);
   if (!card) return '';
-  return seatIdOf(card.assignee) || seatIdOf(card.owner) || '';
+  return String(card.sha || card.head_sha || card.head || '').trim();
+}
+function wakeFilterConfig() {
+  let roster = null;
+  try {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector', 'fleet-roster.json');
+    roster = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch { /* the env var still decides */ }
+  return readWakeFilter(process.env, roster);
 }
 function enqueuePending(seat, line) {
   const id = canonSeat(seat);
@@ -582,12 +597,17 @@ function offerLines(lines) {
       recordSkip(seat, w.line, 'own_actor');
       continue;
     }
+    const kept = allowWake(wakeFilterConfig(), seat, w.line, {
+      now, state: wakeState, owner: ownerOfLine(w.line), head: headOfLine(w.line),
+    });
+    if (!kept.allow) { recordSkip(seat, w.line, 'filter'); continue; }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
     if (d.op === 'skip') {
       recordSkip(seat, d.line, d.reason);
       if (d.needsHuman) flagBreaker(d.line, now);
       continue;
     }
+    commitWake(wakeState, seat, w.line, now);
     if (d.op === 'queue') {
       wakeState.hold.push({ seat, line: d.line, until: d.until });
       armHold(d.until);
