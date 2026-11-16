@@ -230,7 +230,10 @@ test('noteCi retries a pending sha after the gap and wakes once', async () => {
       api: () => 'https://api.github.com',
       fetch: fetchImpl,
       seen: (repo, n, head) => greenSeen(wake, { repo, number: n, sha: head }),
-      deliver: (ping) => { wakes.push(ping); rememberGreen(wake, ping); },
+      deliver: (batch) => {
+        const rows = Array.isArray(batch) ? batch : [batch];
+        for (const ping of rows) { wakes.push(ping); rememberGreen(wake, ping); }
+      },
     });
     const ev = { repo: '0xRayAI/clearing', number: 28, sha, kind: 'ci_pass' };
     await heads.noteCi(ev, 28);
@@ -252,28 +255,38 @@ test('noteCi retries a pending sha after the gap and wakes once', async () => {
   }
 });
 
-test('noteCi wakes the packet R seat and critic when the head is green', async () => {
+test('noteCi wakes critic and R once through commitWake', async () => {
   const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
   const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
     { name: 'ci', workflow_id: 4, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'success' },
   ] }) });
   const card = { owner: 'builder-cloud', repo: '0xRayAI/clearing', number: 28, packet: { 'next owner': 'mill applies the patch' } };
-  const wakes = [];
+  const wake = createWakeState();
+  const sent = [];
   const heads = createCriticHeads({
     state: { fetched: new Map(), quietUntil: 0, deniedLogged: false },
     token: () => 'ghs_test',
     api: () => 'https://api.github.com',
     fetch: fetchImpl,
+    seen: (repo, n, head) => greenSeen(wake, { repo, number: n, sha: head }),
     card: () => card,
-    deliver: (ping) => wakes.push(ping),
+    deliver: (batch) => {
+      const lines = Array.isArray(batch) ? batch : [batch];
+      if (!lines.some(row => !greenSeen(wake, row))) return;
+      const owner = owedSeat(card, value => String(value || '').trim().toLowerCase());
+      for (const row of lines) {
+        const kept = allowWake(on, row.seat, row, ctx({ state: wake, owner, head: sha }));
+        if (!kept.allow) continue;
+        commitWake(wake, row.seat, row, NOW);
+        sent.push(row.seat);
+      }
+    },
   });
-  await heads.noteCi({ repo: card.repo, number: card.number, sha, kind: 'ci_pass' }, card.number);
-  const seats = wakes.map(row => row.seat).sort();
-  assert.deepEqual(seats, ['critic', 'mill']);
-  const mill = wakes.find(row => row.seat === 'mill');
-  assert.equal(mill.packet, undefined);
-  assert.equal(mill.raci, undefined);
-  assert.equal(allowWake(on, 'mill', mill, ctx({ owner: 'mill', head: sha })).allow, true);
+  const ev = { repo: card.repo, number: card.number, sha, kind: 'ci_pass' };
+  await heads.noteCi(ev, card.number);
+  await heads.noteCi(ev, card.number);
+  assert.deepEqual(sent.filter(seat => seat === 'critic'), ['critic']);
+  assert.deepEqual(sent.filter(seat => seat === 'mill'), ['mill']);
   assert.equal(assignCloudRaci(card).packet.raci, 'R=mill A=forge');
 });
 

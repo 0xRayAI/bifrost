@@ -1265,10 +1265,11 @@ const actionHeadRetry = createCriticHeads({
   seen: (repo, n, sha) => greenSeen(wakeState, { repo, number: n, sha }),
   card: (repo, n) => cardOfLine({ repo, number: n }),
   log: (line) => console.log(line),
-  deliver: (ping) => {
-    if (!ping) return;
-    if (!greenSeen(wakeState, ping)) postSeatLines({ lines: [ping] }, null);
-    else if (rememberGreen(wakeState, ping)) persistWakeBreaker();
+  deliver: (batch) => {
+    const lines = (Array.isArray(batch) ? batch : [batch]).filter(Boolean);
+    if (!lines.length) return;
+    if (lines.some(line => !greenSeen(wakeState, line))) postSeatLines({ lines }, null);
+    else if (lines.some(line => rememberGreen(wakeState, line))) persistWakeBreaker();
   },
 });
 function noteCi(ev) {

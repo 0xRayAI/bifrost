@@ -331,10 +331,8 @@ export function createCriticHeads(opts) {
       drop(key);
       const ping = criticGreenLine(ev, runs, {});
       const ownerWake = rSeatLine(ev, repo, number, sha);
-      if (typeof opts.deliver === 'function') {
-        if (ping) opts.deliver(ping);
-        if (ownerWake) opts.deliver(ownerWake);
-      }
+      const batch = [ping, ownerWake].filter(Boolean);
+      if (batch.length && typeof opts.deliver === 'function') opts.deliver(batch);
       return ping;
     }
     const gapSkip = prior != null && state.retryAt && state.retryAt.get(key) === prior && now < prior && runs == null;
