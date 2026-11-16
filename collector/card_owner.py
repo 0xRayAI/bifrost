@@ -4,7 +4,7 @@ import re
 # Kit seats plus the builder default and the operator role name.
 SEATS = frozenset({
     "builder", "builder-cloud", "arch1", "forge", "critic", "blinky",
-    "herald", "nibbler", "sound", "magnet", "operator",
+    "herald", "nibbler", "sound", "magnet", "mill", "near", "operator",
 })
 BOARD_OWNER_RE = re.compile(r"(?im)^[ \t]*Board-Owner:[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*$")
 

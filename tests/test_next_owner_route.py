@@ -66,6 +66,16 @@ class NextOwnerRoute(unittest.TestCase):
         reasons = [(line.get("seat"), line.get("reason")) for line in lines]
         self.assertIn(("arch1", "packet next owner"), reasons)
 
+    def test_builder_cloud_next_owner_fills_r_and_a(self):
+        import live_packet
+        packet = {"next owner": "mill applies the patch"}
+        live_packet.fill_cloud_raci(packet, "builder-cloud")
+        self.assertEqual(packet["raci"], "R=mill A=forge")
+        self.assertEqual(live_packet.raci_gaps(packet), [])
+        arch = {"next owner": "arch1 reviews"}
+        live_packet.fill_cloud_raci(arch, "builder-cloud")
+        self.assertEqual(arch["raci"], "R=forge A=forge")
+
     def test_packet_r_files_the_opener(self):
         event = {
             "id": "0xRayAI/xray#1039:open",

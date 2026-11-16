@@ -329,7 +329,7 @@ const OPERATOR_NAMES = new Set(['operator', 'tester', 'qa', 'lab']);
 // LIVE_SEAT_IDS (comma list) replaces the fleet's seat ids; builder / builder-cloud are kit plumbing and always kept.
 const SEAT_IDS = process.env.LIVE_SEAT_IDS
   ? [...new Set(['builder', 'builder-cloud', ...process.env.LIVE_SEAT_IDS.split(',').map(x => x.trim().toLowerCase()).filter(x => /^[a-z0-9][a-z0-9_-]{0,31}$/.test(x))])]
-  : ['builder', 'builder-cloud', 'arch1', 'forge', 'critic', 'blinky', 'herald', 'nibbler', 'sound', 'magnet'];
+  : ['builder', 'builder-cloud', 'arch1', 'forge', 'critic', 'blinky', 'herald', 'mill', 'near', 'nibbler', 'sound', 'magnet'];
 function canonSeat(name) {
   const id = String(name || '').toLowerCase();
   if (SEAT_IDS.includes(id)) return id;
@@ -356,7 +356,7 @@ const CARD_SEAT = { 'builder-cloud': 'builder' };
 const jsonEnvObj = name => { try { const o = JSON.parse(process.env[name] || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } };
 configureWorkTrack({
   seatIds: SEAT_IDS, display: { ...SEAT_DISPLAY, ...jsonEnvObj('SEAT_DISPLAY_NAMES') }, alias: SEAT_ALIAS,
-  mirror: { builder: 'builder-cloud' }, launchSeat: ARCH1_CANON,
+  mirror: { builder: 'builder-cloud' }, launchSeat: 'forge',
   humanTo: process.env.WORK_HUMAN_TO, humanLane: process.env.WORK_HUMAN_LANE,
 });
 const SEAT_KEY_HASH = (() => { try { const o = JSON.parse(process.env.SEAT_KEYS || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } })();
@@ -1263,6 +1263,7 @@ const actionHeadRetry = createCriticHeads({
   api: () => GITHUB_API,
   closed: (repo, n, ev) => itemClosed(repo, n) || lineClosed(ev),
   seen: (repo, n, sha) => greenSeen(wakeState, { repo, number: n, sha }),
+  card: (repo, n) => cardOfLine({ repo, number: n }),
   log: (line) => console.log(line),
   deliver: (ping) => {
     if (!ping) return;
@@ -2174,7 +2175,7 @@ function applyTrackWorking(fleet, track, now) {
   f.active = Object.values(f.seats).filter(v => v.active && !v.external).length;
   return f;
 }
-const PARKED_QUEUE = new Set(['herald', 'magnet', 'nibbler', 'sound']);
+const PARKED_QUEUE = new Set(['magnet', 'nibbler', 'sound']);
 const OPEN_ASKS = new Set(['packet', 'dispatch', 'ready', 'critic_fail', 'needs_human', 'issue_comment', 'pr_comment', 'pr_open', 'issue_open', 'comment', 'pr', 'issue']);
 function chicagoDay(ms) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));

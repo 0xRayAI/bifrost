@@ -130,6 +130,43 @@ def raci_roles(value):
     return found
 
 
+CLOUD_OWNERS = frozenset({"builder", "builder-cloud", "cloud"})
+RACI_SEATS = frozenset({"mill", "near", "critic", "forge", "herald", "nibbler", "magnet", "blinky"})
+ENG_SEAT = "forge"
+
+
+def next_owner_seat(value):
+    """The first word of a next-owner line, when it names a seat. arch1 routes to forge."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    word = re.sub(r"[^a-z0-9_-]", "", raw.split()[0])
+    if word == "arch1":
+        return ENG_SEAT
+    return word if word in RACI_SEATS else ""
+
+
+def fill_cloud_raci(packet, owner):
+    """A cloud-owned card takes R from the packet next owner and A from forge."""
+    if not isinstance(packet, dict):
+        return packet
+    who = str(owner or "").strip().lower()
+    if who not in CLOUD_OWNERS:
+        return packet
+    seat = next_owner_seat(packet.get("next owner") or packet.get("next_owner"))
+    if not seat:
+        return packet
+    roles = raci_roles(packet.get("raci"))
+    if not roles.get("R"):
+        roles["R"] = seat
+    if not roles.get("A"):
+        roles["A"] = ENG_SEAT
+    joined = _join_raci(roles)
+    if joined:
+        packet["raci"] = joined
+    return packet
+
+
 def raci_gaps(packet, state="live", pinned=False):
     """R and A still missing. Closed and pinned cards stay quiet."""
     if pinned or state == "closed":

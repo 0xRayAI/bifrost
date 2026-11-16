@@ -7,6 +7,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const REVIEW = new Set(['review', 'critic_pass', 'critic_fail', 'verdict']);
 const DIRECT = new Set(['dispatch', 'packet', 'handoff', 'start_after']);
 const ROUTED = new Set(['near', 'mill']);
+const CLOUD_OWNERS = new Set(['builder', 'builder-cloud', 'cloud']);
+const RACI_SEATS = new Set(['mill', 'near', 'critic', 'forge', 'herald', 'nibbler', 'magnet', 'blinky']);
 
 function kindOf(line) {
   return String(line && (line.kind || line.type) || '').trim().toLowerCase();
@@ -284,6 +286,30 @@ export function createCriticHeads(opts) {
     timers.set(key, timer);
   }
 
+  function rSeatLine(ev, repo, number, sha) {
+    if (typeof opts.card !== 'function') return null;
+    const card = opts.card(repo, number);
+    if (!card) return null;
+    const filled = assignCloudRaci(card);
+    const owner = String(filled.owner || '').trim().toLowerCase();
+    if (!CLOUD_OWNERS.has(owner)) return null;
+    const seat = raciRole(filled.packet, 'R');
+    if (!seat) return null;
+    return {
+      id: `wake:${seat}:${repo.toLowerCase()}#${number}:${sha}`,
+      t_ct: String(ev.t_ct || ''),
+      seat,
+      type: 'ci_pass',
+      kind: 'ci_pass',
+      repo,
+      number,
+      sha,
+      title: 'CI green',
+      url: String(ev.url || ev.source || `https://github.com/${repo}/pull/${number}`),
+      reason: 'CI green for R',
+    };
+  }
+
   async function noteCi(ev, n) {
     const token = String(opts.token ? opts.token() : '').trim();
     if (!token) return null;
@@ -304,7 +330,11 @@ export function createCriticHeads(opts) {
     if (runs && runsAllGreen(runs)) {
       drop(key);
       const ping = criticGreenLine(ev, runs, {});
-      if (ping && typeof opts.deliver === 'function') opts.deliver(ping);
+      const ownerWake = rSeatLine(ev, repo, number, sha);
+      if (typeof opts.deliver === 'function') {
+        if (ping) opts.deliver(ping);
+        if (ownerWake) opts.deliver(ownerWake);
+      }
       return ping;
     }
     const gapSkip = prior != null && state.retryAt && state.retryAt.get(key) === prior && now < prior && runs == null;
@@ -398,12 +428,49 @@ export function commitWake(state, seat, line, now) {
   if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) rememberGreen(state, line);
 }
 
-// Assignee, then owner. classifyBatch and allowWake both use this, so a review
+export function packetSeat(value) {
+  const word = String(value || '').trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9_-]/g, '');
+  if (!word) return '';
+  if (word === 'arch1') return 'forge';
+  return RACI_SEATS.has(word) ? word : '';
+}
+
+function raciRole(packet, letter) {
+  const text = String(packet && packet.raci || '');
+  const match = text.match(new RegExp(`\\b${letter}\\s*[=:]\\s*([A-Za-z][A-Za-z0-9_-]*)`, 'i'));
+  return match ? packetSeat(match[1]) : '';
+}
+
+export function assignCloudRaci(card) {
+  if (!card || typeof card !== 'object') return card;
+  const owner = String(card.owner || '').trim().toLowerCase();
+  if (!CLOUD_OWNERS.has(owner)) return card;
+  const packet = card.packet && typeof card.packet === 'object' ? { ...card.packet } : {};
+  const seat = packetSeat(packet['next owner'] || packet.next_owner);
+  if (!seat) return card;
+  const roles = {};
+  for (const match of String(packet.raci || '').matchAll(/\b([RACI])\s*[=:]\s*([A-Za-z][A-Za-z0-9_-]*)/gi)) {
+    roles[match[1].toUpperCase()] = match[2];
+  }
+  if (!roles.R) roles.R = seat;
+  if (!roles.A) roles.A = 'forge';
+  packet.raci = ['R', 'A', 'C', 'I'].filter(key => roles[key]).map(key => `${key}=${roles[key]}`).join(' ');
+  return { ...card, packet };
+}
+
+// Assignee, then owner. A cloud card owes the packet R. arch1 cards owe forge.
 // offered to one of them is not filtered for the other.
 export function owedSeat(card, idOf) {
   const id = typeof idOf === 'function' ? idOf : (value => String(value || '').trim().toLowerCase());
   if (!card) return '';
-  return id(card.assignee) || id(card.owner) || '';
+  const filled = assignCloudRaci(card);
+  const owner = id(filled.owner);
+  if (CLOUD_OWNERS.has(owner)) {
+    const seat = raciRole(filled.packet, 'R') || packetSeat((filled.packet || {})['next owner'] || (filled.packet || {}).next_owner);
+    if (seat) return seat;
+  }
+  const seat = id(filled.assignee) || owner || '';
+  return seat === 'arch1' ? 'forge' : seat;
 }
 
 export function allowWake(config, seat, line, ctx) {
@@ -424,6 +491,7 @@ export function allowWake(config, seat, line, ctx) {
     if (ctx.closed || lineClosed(line) || !fullHeadSha(line) || greenSeen(state, line)) return { allow: false, reason: 'filter' };
     return { allow: true };
   }
+  if (String(line && line.reason || '') === 'CI green for R' && ctx.owner === who) return { allow: true };
   if (assignedR(line, who)) return { allow: true };
   return { allow: false, reason: 'filter' };
 }

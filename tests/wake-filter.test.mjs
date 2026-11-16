@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen } from '../wake-filter.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen, assignCloudRaci } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -60,6 +60,13 @@ test('a card with a different owner and assignee wakes the assignee', () => {
   assert.equal(allowWake(on, 'mill', line({ type: 'ci_fail', sha: 'abc123' }), view).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'critic_pass', sha: 'abc123' }), view).allow, false);
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'abc123' }), view).allow, false);
+});
+
+test('a builder-cloud card gives mill R and forge A', () => {
+  const card = assignCloudRaci({ owner: 'builder-cloud', packet: { 'next owner': 'mill applies the patch' } });
+  assert.equal(card.packet.raci, 'R=mill A=forge');
+  assert.equal(owedSeat(card, value => String(value || '').trim().toLowerCase()), 'mill');
+  assert.equal(owedSeat({ owner: 'arch1' }, value => String(value || '').trim().toLowerCase()), 'forge');
 });
 
 test('near or mill get an R assignment, and a green head does not wake', () => {
@@ -243,6 +250,31 @@ test('noteCi retries a pending sha after the gap and wakes once', async () => {
   } finally {
     mock.timers.reset();
   }
+});
+
+test('noteCi wakes the packet R seat and critic when the head is green', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
+    { name: 'ci', workflow_id: 4, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'success' },
+  ] }) });
+  const card = { owner: 'builder-cloud', repo: '0xRayAI/clearing', number: 28, packet: { 'next owner': 'mill applies the patch' } };
+  const wakes = [];
+  const heads = createCriticHeads({
+    state: { fetched: new Map(), quietUntil: 0, deniedLogged: false },
+    token: () => 'ghs_test',
+    api: () => 'https://api.github.com',
+    fetch: fetchImpl,
+    card: () => card,
+    deliver: (ping) => wakes.push(ping),
+  });
+  await heads.noteCi({ repo: card.repo, number: card.number, sha, kind: 'ci_pass' }, card.number);
+  const seats = wakes.map(row => row.seat).sort();
+  assert.deepEqual(seats, ['critic', 'mill']);
+  const mill = wakes.find(row => row.seat === 'mill');
+  assert.equal(mill.packet, undefined);
+  assert.equal(mill.raci, undefined);
+  assert.equal(allowWake(on, 'mill', mill, ctx({ owner: 'mill', head: sha })).allow, true);
+  assert.equal(assignCloudRaci(card).packet.raci, 'R=mill A=forge');
 });
 
 test('a merged or closed pull does not wake critic', () => {

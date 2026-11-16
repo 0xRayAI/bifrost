@@ -1039,6 +1039,7 @@ def model(extra_events=None, now=None, prompts=None, held=None):
         if live_packet.repo_no_nudge(c.get("repo")):
             c.pop("nudge_to", None); c.pop("nudge_via", None)
             stall = False
+        live_packet.fill_cloud_raci(pk, c.get("owner"))
         missing = [] if brief_exempt(c, pk) else ["PACKET.md"]
         raci_missing = live_packet.raci_gaps(pk, state, c.get("pinned"))
         if resolved:
