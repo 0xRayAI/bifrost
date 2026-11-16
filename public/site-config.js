@@ -13,7 +13,7 @@
   // 920 x 400 canvas: a network. GitHub is the mesh at the center; seats and rails ring it (Blaze 2026-11-16).
   // CloudAgents is the cursor cloud-agent circle. Pings land on it, not on GitHub.
   reset(L.SATS, { GitHub: [460, 200], Blaze: [460, 50], forge: [640, 70], mill: [772, 125], near: [820, 200], nibbler: [772, 275],
-    herald: [640, 330], Railway: [460, 350], Assistant: [280, 330], CloudAgents: [148, 275], arch1: [100, 200], blinky: [148, 125], critic: [280, 70] });
+    herald: [640, 330], Railway: [460, 335], Assistant: [280, 330], CloudAgents: [148, 275], arch1: [100, 200], blinky: [148, 125], critic: [280, 70] });
   var C = { blinky: [88, 210, 180], critic: [255, 150, 90], forge: [255, 140, 70], mill: [230, 190, 90], near: [120, 220, 140], nibbler: [190, 150, 240], herald: [240, 120, 180], arch1: [255, 120, 100],
     GitHub: [200, 210, 230], Blaze: [255, 120, 60], Railway: [170, 130, 255], CloudAgents: [130, 190, 255], Assistant: [116, 170, 156] };
   reset(L.COLOR, C);
