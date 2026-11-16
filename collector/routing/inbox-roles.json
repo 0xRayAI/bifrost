@@ -57,6 +57,20 @@
         "sound"
       ]
     },
+    "mill": {
+      "login": null,
+      "aliases": [
+        "Mill",
+        "mill"
+      ]
+    },
+    "near": {
+      "login": null,
+      "aliases": [
+        "Near",
+        "near"
+      ]
+    },
     "arch1": {
       "login": "arch10x[bot]",
       "aliases": [],
@@ -134,7 +148,6 @@
       "needles": [
         "@forge",
         "@forge0x1",
-        "@mill",
         "merge ask",
         "deploy ask",
         "run gate b",
@@ -170,6 +183,18 @@
         "@herald0x"
       ],
       "reason": "Dist ask for herald"
+    },
+    "mill": {
+      "needles": [
+        "@mill"
+      ],
+      "reason": "implement ask for mill"
+    },
+    "near": {
+      "needles": [
+        "@near"
+      ],
+      "reason": "scout ask for near"
     },
     "nibbler": {
       "needles": [

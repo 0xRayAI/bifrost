@@ -1029,9 +1029,16 @@ export function deriveTrackFromDir(dir, now, windowMs, closedKeys) {
 }
 
 export function loadSeatAgentMap(raw) {
-  if (!raw || !String(raw).trim()) return {};
+  const pins = {
+    'bc-fba6bbae*': 'forge',
+    'bc-098a437d*': 'mill',
+    'bc-753d223e*': 'near',
+    'bc-7034043e*': 'nibbler',
+  };
+  if (!raw || !String(raw).trim()) return { ...pins };
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch { return {}; }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { ...pins, ...parsed };
+  } catch { /* the pins stay */ }
+  return { ...pins };
 }
