@@ -79,10 +79,57 @@ const GREEN_REASON = 'CI green on current head';
 const RUN_PAGES = 20;
 const RERUN_MS = 60 * 1000;
 
-function slots(state) {
-  if (!state.stationAt) state.stationAt = new Map();
-  if (!Array.isArray(state.greenHeads)) state.greenHeads = [];
-  return state;
+function lineSha(line) {
+  return String(line && (line.sha || line.head_sha || line.head) || '').trim().toLowerCase();
+}
+
+function lineKind(line) {
+  return String(line && (line.kind || line.type) || '').trim().toLowerCase();
+}
+
+// Per seat. An inbox id, or repo#n|sha|kind, means this wake was already posted.
+function noteDelivered(state, seat, line) {
+  if (!state || !line || stationLine(line)) return;
+  const who = String(seat || line.seat || '').toLowerCase();
+  if (!who) return;
+  const book = slots(state).delivered;
+  const id = String(line.inbox_id || line.id || '').trim();
+  if (id) book.ids.add(`${who}|${id}`);
+  const repo = String(line.repo || '').trim().toLowerCase();
+  const n = Number(line.number);
+  const sha = lineSha(line);
+  const kind = lineKind(line);
+  if (repo && Number.isInteger(n) && n > 0 && sha && kind) book.keys.add(`${who}|${repo}#${n}|${sha}|${kind}`);
+}
+
+function alreadyDelivered(state, seat, line) {
+  if (!state || !line || stationLine(line) || !state.delivered) return false;
+  const who = String(seat || line.seat || '').toLowerCase();
+  if (!who) return false;
+  const book = state.delivered;
+  const id = String(line.inbox_id || line.id || '').trim();
+  if (id && book.ids.has(`${who}|${id}`)) return true;
+  const repo = String(line.repo || '').trim().toLowerCase();
+  const n = Number(line.number);
+  const sha = lineSha(line);
+  const kind = lineKind(line);
+  if (!repo || !Number.isInteger(n) || n < 1 || !sha || !kind) return false;
+  return book.keys.has(`${who}|${repo}#${n}|${sha}|${kind}`);
+}
+
+// Missing head fails open: we do not know it is stale, so the wake still goes out.
+function staleHead(line, head) {
+  const sha = lineSha(line);
+  const cur = String(head || '').trim().toLowerCase();
+  if (!sha || !cur) return false;
+  return !(sha === cur || cur.startsWith(sha) || sha.startsWith(cur));
+}
+
+function dropBeforePost(state, seat, line, ctx) {
+  if (alreadyDelivered(state, seat, line)) return true;
+  if (ctx && (ctx.closed || lineClosed(line))) return true;
+  if (staleHead(line, ctx && ctx.head)) return true;
+  return false;
 }
 
 export function fullHeadSha(line) {
@@ -412,6 +459,13 @@ export function criticGreenLine(ev, checks, opts = {}) {
   };
 }
 
+function slots(state) {
+  if (!state.stationAt) state.stationAt = new Map();
+  if (!Array.isArray(state.greenHeads)) state.greenHeads = [];
+  if (!state.delivered) state.delivered = { ids: new Set(), keys: new Set() };
+  return state;
+}
+
 function stationOpen(state, seat, now) {
   const prev = slots(state).stationAt.get(seat) || 0;
   return !(prev && now - prev < HOUR_MS);
@@ -424,6 +478,7 @@ export function commitWake(state, seat, line, now) {
   const who = String(seat || '').toLowerCase();
   if (stationLine(line)) book.stationAt.set(who, now);
   if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) rememberGreen(state, line);
+  noteDelivered(state, who, line);
 }
 
 export function packetSeat(value) {
@@ -473,8 +528,9 @@ export function owedSeat(card, idOf) {
 
 export function allowWake(config, seat, line, ctx) {
   const who = String(seat || '').toLowerCase();
+  const state = ctx && ctx.state;
+  if (dropBeforePost(state, who, line, ctx || {})) return { allow: false, reason: 'filter' };
   if (filterMode(config, who) === 'all') return { allow: true };
-  const state = ctx.state;
   const now = ctx.now;
   if (stationLine(line)) return stationOpen(state, who, now) ? { allow: true } : { allow: false, reason: 'filter' };
   const kind = kindOf(line);

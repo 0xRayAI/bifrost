@@ -62,6 +62,26 @@ test('a card with a different owner and assignee wakes the assignee', () => {
   assert.equal(allowWake(on, 'forge', line({ type: 'ci_fail', sha: 'abc123' }), view).allow, false);
 });
 
+test('a delivered line, a stale head, and a merged pull do not wake; the current head does', () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = createWakeState();
+  const repo = '0xRayAI/xray';
+  const live = line({ id: 'wake:forge:xray#1170:' + sha, type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha });
+  const current = ctx({ state, owner: 'forge', head: sha, closed: false });
+  assert.equal(allowWake(on, 'forge', live, current).allow, true);
+  commitWake(state, 'forge', live, NOW);
+  assert.equal(allowWake(on, 'forge', live, current).allow, false);
+  const sameKey = line({ id: 'wake:forge:xray#1170:again', type: 'ci_fail', kind: 'ci_fail', repo, number: 1170, sha });
+  assert.equal(allowWake(on, 'forge', sameKey, current).allow, false);
+  const stale = line({ id: 'wake:forge:xray#1166:old', type: 'ci_fail', kind: 'ci_fail', repo, number: 1166, sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+  assert.equal(allowWake(on, 'forge', stale, ctx({ state, owner: 'forge', head: sha })).allow, false);
+  const merged = line({ id: 'wake:critic:xray#1154:' + sha, type: 'ci_pass', kind: 'ci_pass', repo, number: 1154, sha, reason: 'CI green on current head' });
+  assert.equal(allowWake(on, 'critic', merged, ctx({ state, head: sha, closed: true })).allow, false);
+  const open = line({ id: 'wake:forge:xray#1168:' + sha, type: 'ci_fail', kind: 'ci_fail', repo, number: 1168, sha });
+  assert.equal(allowWake(on, 'forge', open, ctx({ state, owner: 'forge', head: sha, closed: false })).allow, true);
+  commitWake(state, 'forge', open, NOW);
+});
+
 test('a builder-cloud card gives mill R and forge A', () => {
   const card = assignCloudRaci({ owner: 'builder-cloud', packet: { 'next owner': 'mill applies the patch' } });
   assert.equal(card.packet.raci, 'R=mill A=forge');
