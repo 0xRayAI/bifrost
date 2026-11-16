@@ -71,10 +71,10 @@ function assignedR(line, seat) {
   return new RegExp(`\\bR\\s*=\\s*${seat}\\b`, 'i').test(raci);
 }
 
-const SUCCESS = new Set(['success', 'passed', 'green']);
-const SUITE = new Set(['check_suite', 'workflow_run', 'ci_pass', 'ci_success']);
+const PASS = new Set(['success', 'skipped', 'neutral']);
 const CLOSED = new Set(['merged', 'merge', 'pr_close', 'issue_close', 'pr_closed', 'issue_closed', 'closed']);
 const GREEN_REASON = 'CI green on current head';
+const RUN_PAGES = 20;
 
 function slots(state) {
   if (!state.stationAt) state.stationAt = new Map();
@@ -97,77 +97,98 @@ function sameSha(a, b) {
   return a === b || a.startsWith(b) || b.startsWith(a);
 }
 
-function successDone(row) {
-  const conclusion = String(row && row.conclusion || '').toLowerCase();
-  const status = String(row && row.status || '').toLowerCase();
-  if (!SUCCESS.has(conclusion)) return false;
-  return !status || status === 'completed';
-}
-
-// Every check_run is done and successful, and a completed suite agrees.
-// A suite or a workflow by itself is not the head. A missing row is not success.
-export function checksAllGreen(checks) {
-  const list = (Array.isArray(checks) ? checks : []).filter(row => row && row.required !== false);
-  const runs = list.filter(row => String(row.kind || '') === 'check_run');
-  const suites = list.filter(row => SUITE.has(String(row.kind || '')));
-  if (!runs.length || !suites.length) return false;
-  return list.every(successDone);
-}
-
 function ghWord(value) {
   if (value == null) return '';
   return String(value).trim().toLowerCase();
 }
 
-// The collector's read token. A missing page, a short page, or a failed read is not a green head.
-export async function githubHeadChecks(repo, sha, opts = {}) {
+// Actions runs for one head. total_count must be covered, and every run completed.
+export function runsAllGreen(runs) {
+  const list = Array.isArray(runs) ? runs : [];
+  if (!list.length) return false;
+  return list.every((row) => {
+    const status = ghWord(row && row.status);
+    const conclusion = ghWord(row && row.conclusion);
+    return status === 'completed' && PASS.has(conclusion);
+  });
+}
+
+function mapRun(row) {
+  return {
+    name: String(row && row.name || ''),
+    status: ghWord(row && row.status),
+    conclusion: ghWord(row && row.conclusion),
+  };
+}
+
+// GITHUB_READ_TOKEN only. A missing token, a short page, a 403, or a 429 is not a green head.
+// opts.state fetches each sha once and backs off after 403 or 429. A 403 is logged once.
+export async function githubHeadRuns(repo, sha, opts = {}) {
   const token = String(opts.token || '').trim();
+  if (!token) return null;
   const fetchImpl = opts.fetch || globalThis.fetch;
+  if (typeof fetchImpl !== 'function') return null;
   const api = String(opts.api || 'https://api.github.com').replace(/\/$/, '');
   const parts = String(repo || '').trim().split('/');
   const head = String(sha || '').trim().toLowerCase();
-  if (!token || parts.length !== 2 || !parts[0] || !parts[1] || !/^[0-9a-f]{7,40}$/.test(head)) return null;
-  if (typeof fetchImpl !== 'function') return null;
+  if (parts.length !== 2 || !parts[0] || !parts[1] || !/^[0-9a-f]{7,40}$/.test(head)) return null;
+  const state = opts.state;
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const backoffMs = Number.isFinite(opts.backoffMs) ? opts.backoffMs : 15 * 60 * 1000;
+  const key = `${parts[0]}/${parts[1]}@${head}`.toLowerCase();
+  if (state && now < state.quietUntil) return null;
+  if (state && state.fetched && state.fetched.has(key)) return state.fetched.get(key);
+
   const headers = {
     Authorization: 'Bearer ' + token,
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'live-board-feed',
   };
-  const read = async (path) => {
-    let res;
-    try {
-      res = await fetchImpl(api + path, { headers, signal: AbortSignal.timeout(15000) });
-    } catch {
-      return null;
+  const root = `/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/actions/runs`;
+
+  async function finish() {
+    const rows = [];
+    let total = null;
+    for (let page = 1; page <= RUN_PAGES; page++) {
+      const path = `${root}?head_sha=${encodeURIComponent(head)}&per_page=100&page=${page}`;
+      let res;
+      try {
+        res = await fetchImpl(api + path, { headers, signal: AbortSignal.timeout(15000) });
+      } catch {
+        return null;
+      }
+      if (!res) return null;
+      if (res.status === 403 || res.status === 429) {
+        if (state) {
+          state.quietUntil = now + backoffMs;
+          state.fetched.delete(key);
+          if (res.status === 403 && !state.deniedLogged) {
+            state.deniedLogged = true;
+            if (typeof opts.log === 'function') opts.log('wake: actions runs 403, green wake off');
+          }
+        }
+        return null;
+      }
+      if (!res.ok) return null;
+      let body;
+      try { body = await res.json(); } catch { return null; }
+      const chunk = body && body.workflow_runs;
+      if (!Array.isArray(chunk)) return null;
+      if (total == null) {
+        total = Number(body.total_count);
+        if (!Number.isFinite(total) || total < 0) return null;
+      }
+      rows.push(...chunk);
+      if (rows.length >= total) return rows.length === total ? rows.map(mapRun) : null;
+      if (chunk.length === 0) return null;
     }
-    if (!res || !res.ok) return null;
-    try { return await res.json(); } catch { return null; }
-  };
-  const root = `/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/commits/${head}`;
-  const [runsBody, suitesBody] = await Promise.all([
-    read(root + '/check-runs?per_page=100'),
-    read(root + '/check-suites?per_page=100'),
-  ]);
-  if (!runsBody || !suitesBody) return null;
-  const runs = Array.isArray(runsBody.check_runs) ? runsBody.check_runs : null;
-  const suites = Array.isArray(suitesBody.check_suites) ? suitesBody.check_suites : null;
-  if (!runs || !suites || !runs.length) return null;
-  if (Number(runsBody.total_count) !== runs.length || Number(suitesBody.total_count) !== suites.length) return null;
-  return [
-    ...runs.map(row => ({
-      kind: 'check_run',
-      name: String(row && row.name || ''),
-      status: ghWord(row && row.status),
-      conclusion: ghWord(row && row.conclusion),
-    })),
-    ...suites.map(row => ({
-      kind: 'check_suite',
-      name: String(row && row.app && row.app.slug || 'suite'),
-      status: ghWord(row && row.status),
-      conclusion: ghWord(row && row.conclusion),
-    })),
-  ];
+    return null;
+  }
+
+  const job = finish();
+  if (state) state.fetched.set(key, job);
+  return job;
 }
 
 export function lineClosed(line) {
@@ -220,7 +241,7 @@ export function restoreGreenHeads(state, dump) {
 
 export function criticGreenLine(ev, checks, opts = {}) {
   if (!ev || opts.closed || lineClosed(ev)) return null;
-  if (!checksAllGreen(checks)) return null;
+  if (!runsAllGreen(checks)) return null;
   const row = greenRow(ev);
   if (!row) return null;
   return {

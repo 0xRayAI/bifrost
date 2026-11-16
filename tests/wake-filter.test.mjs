@@ -1,8 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
-import { createBatch } from '../pr-batch.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadChecks } from '../wake-filter.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -71,21 +70,20 @@ test('near or mill get an R assignment, and a green head does not wake', () => {
   assert.equal(allowWake(on, 'forge', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, false);
 });
 
-test('critic wakes once when every check is green, and a partial head stays quiet', () => {
+test('critic wakes once when every actions run is green, and a partial head stays quiet', () => {
   const full = '3781168cc00a136b458ebdd97be1399ea195da29';
   const short = full.slice(0, 12);
   const runs = [
-    { kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' },
-    { kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'success' },
+    { name: 'unit', status: 'completed', conclusion: 'success' },
+    { name: 'lint', status: 'completed', conclusion: 'skipped' },
+    { name: 'docs', status: 'completed', conclusion: 'neutral' },
   ];
-  const suite = { kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' };
   const ev = { repo: '0xRayAI/clearing', number: 28, sha: short, head_sha: full };
-  assert.equal(criticGreenLine(ev, [suite], {}), null);
-  assert.equal(criticGreenLine(ev, runs, {}), null);
-  assert.equal(criticGreenLine(ev, [runs[0], { ...runs[1], status: 'in_progress', conclusion: '' }, suite], {}), null);
-  assert.equal(criticGreenLine(ev, [runs[0], { ...runs[1], conclusion: 'failure' }, suite], {}), null);
-  assert.equal(criticGreenLine(ev, [...runs, { ...suite, conclusion: 'failure' }], {}), null);
-  const ping = criticGreenLine(ev, [...runs, suite], {});
+  assert.equal(criticGreenLine(ev, [], {}), null);
+  assert.equal(criticGreenLine(ev, [{ name: 'unit', status: 'queued', conclusion: null }], {}), null);
+  assert.equal(criticGreenLine(ev, [runs[0], { name: 'lint', status: 'in_progress', conclusion: '' }], {}), null);
+  assert.equal(criticGreenLine(ev, [{ name: 'unit', status: 'completed', conclusion: 'failure' }], {}), null);
+  const ping = criticGreenLine(ev, runs, {});
   assert.equal(ping.sha, full);
   assert.equal(ping.seat, 'critic');
   const state = createWakeState();
@@ -93,50 +91,75 @@ test('critic wakes once when every check is green, and a partial head stays quie
   commitWake(state, 'critic', ping, NOW);
   assert.equal(allowWake(on, 'critic', { ...ping, sha: short }, ctx({ state })).allow, false);
   const newer = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-  const again = criticGreenLine({ ...ev, sha: newer, head_sha: newer }, [...runs, suite], {});
+  const again = criticGreenLine({ ...ev, sha: newer, head_sha: newer }, runs, {});
   assert.equal(allowWake(on, 'critic', again, ctx({ state })).allow, true);
 });
 
-test('the batch list stays quiet until every run and the suite are green', () => {
-  const batch = createBatch();
-  const repo = '0xRayAI/clearing';
-  const number = 28;
+test('one green run does not wake while another has not reported', async () => {
   const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
-  const key = '0xrayai/clearing#28';
-  const ev = { repo, number, sha };
-  batch.observeCi({ ...ev, kind: 'workflow_run', name: 'ci', status: 'completed', conclusion: 'success' });
-  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}), null);
-  batch.observeCi({ ...ev, kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' });
-  batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'in_progress' });
-  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}), null);
-  batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'failure' });
-  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}), null);
-  batch.observeCi({ ...ev, kind: 'check_run', name: 'lint', status: 'completed', conclusion: 'success' });
-  batch.observeCi({ ...ev, kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' });
-  assert.equal(criticGreenLine(ev, batch.checksOf(key), {}).sha, sha);
-});
-
-test('one green check does not wake while another has not reported', async () => {
-  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const urls = [];
   const fetchImpl = async (url) => {
-    if (String(url).includes('/check-runs')) {
-      return { ok: true, json: async () => ({ total_count: 2, check_runs: [
+    urls.push(String(url));
+    const page = Number(new URL(url).searchParams.get('page') || '1');
+    if (page === 1) {
+      return { ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
         { name: 'unit', status: 'completed', conclusion: 'success' },
-        { name: 'lint', status: 'queued', conclusion: null },
       ] }) };
     }
-    return { ok: true, json: async () => ({ total_count: 1, check_suites: [
-      { app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' },
+    return { ok: false, status: 500, json: async () => ({}) };
+  };
+  const runs = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl });
+  assert.equal(runs, null);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, runs || [], {}), null);
+  assert.match(urls[0], /\/actions\/runs\?/);
+  assert.match(urls[0], new RegExp('head_sha=' + sha));
+  assert.equal(urls.some(url => url.includes('check-runs') || url.includes('check-suites')), false);
+});
+
+test('an unset read token does not fetch actions runs', async () => {
+  let called = false;
+  const runs = await githubHeadRuns('0xRayAI/clearing', '3781168cc00a136b458ebdd97be1399ea195da29', {
+    token: '', fetch: async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; },
+  });
+  assert.equal(runs, null);
+  assert.equal(called, false);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha: '3781168cc00a136b458ebdd97be1399ea195da29' }, runs || [], {}), null);
+});
+
+test('a sha is fetched once, and a 403 is logged once', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return { ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
+      { name: 'ci', status: 'completed', conclusion: 'success' },
     ] }) };
   };
-  const checks = await githubHeadChecks('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl });
-  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, checks, {}), null);
+  const first = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl, state, now: 1 });
+  const second = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl, state, now: 2 });
+  assert.deepEqual(second, first);
+  assert.equal(calls, 1);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, first, {}).sha, sha);
+
+  const denied = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+  const logs = [];
+  let hits = 0;
+  const denyFetch = async () => { hits += 1; return { ok: false, status: 403, json: async () => ({}) }; };
+  const opt = { token: 'ghs_test', fetch: denyFetch, state: denied, backoffMs: 5000, log: (line) => logs.push(line) };
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 1000 }), null);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 2000 }), null);
+  assert.equal(hits, 1);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /403/);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 7000 }), null);
+  assert.equal(hits, 2);
+  assert.equal(logs.length, 1);
 });
 
 test('a merged or closed pull does not wake critic', () => {
   const checks = [
-    { kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' },
-    { kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' },
+    { name: 'unit', status: 'completed', conclusion: 'success' },
   ];
   const ev = { repo: '0xRayAI/clearing', number: 28, sha: '3781168cc00a136b458ebdd97be1399ea195da29' };
   assert.equal(criticGreenLine({ ...ev, merged: true }, checks, {}), null);
@@ -151,8 +174,7 @@ test('a seen green head survives a restart, and a short sha is the full sha', ()
   const full = '3781168cc00a136b458ebdd97be1399ea195da29';
   const short = full.slice(0, 12);
   const checks = [
-    { kind: 'check_run', name: 'unit', status: 'completed', conclusion: 'success' },
-    { kind: 'check_suite', name: 'github-actions', status: 'completed', conclusion: 'success' },
+    { name: 'unit', status: 'completed', conclusion: 'success' },
   ];
   const ev = { repo: '0xRayAI/clearing', number: 28, sha: short };
   const early = criticGreenLine(ev, checks, {});
