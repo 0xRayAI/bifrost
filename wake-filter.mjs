@@ -5,9 +5,7 @@
 
 const HOUR_MS = 60 * 60 * 1000;
 const REVIEW = new Set(['review', 'critic_pass', 'critic_fail', 'verdict']);
-const GREEN = new Set(['ci_pass', 'ready', 'live_pass']);
 const DIRECT = new Set(['dispatch', 'packet', 'handoff', 'start_after']);
-const COMMENT = new Set(['pr_comment', 'issue_comment', 'review_comment', 'comment']);
 const ROUTED = new Set(['near', 'mill']);
 
 function kindOf(line) {
@@ -73,14 +71,8 @@ function assignedR(line, seat) {
   return new RegExp(`\\bR\\s*=\\s*${seat}\\b`, 'i').test(raci);
 }
 
-function greenKey(line) {
-  const sha = String(line && line.sha || '').trim().toLowerCase();
-  return `${String(line && line.repo || '').toLowerCase()}#${Number(line && line.number) || 0}|${sha || String(line && line.id || '')}`;
-}
-
 function slots(state) {
   if (!state.stationAt) state.stationAt = new Map();
-  if (!state.greenHeads) state.greenHeads = new Set();
   return state;
 }
 
@@ -89,17 +81,12 @@ function stationOpen(state, seat, now) {
   return !(prev && now - prev < HOUR_MS);
 }
 
-function greenOpen(state, line) {
-  return !slots(state).greenHeads.has(greenKey(line));
-}
-
-// The hour and the green head live on the wake state. A restart clears both.
+// The station hour lives on the wake state. A restart clears it.
 // Call this only after the gate sends or queues. A skip must leave the slot open.
 export function commitWake(state, seat, line, now) {
   const book = slots(state);
   const who = String(seat || '').toLowerCase();
   if (stationLine(line)) book.stationAt.set(who, now);
-  if (who === 'critic' && GREEN.has(kindOf(line))) book.greenHeads.add(greenKey(line));
 }
 
 // Assignee, then owner. classifyBatch and allowWake both use this, so a review
@@ -123,11 +110,7 @@ export function allowWake(config, seat, line, ctx) {
   if (/^nudge L\d/i.test(String(line.reason || ''))) return { allow: true };
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
-  if (kind === 'ci_fail' && (!ctx.owner || ctx.owner === who) && currentHead(line, ctx.head)) return { allow: true };
-  // Seat comments still reach the gate, so the breaker and the repeat rules stay as they are.
-  if (COMMENT.has(kind) || kind === 'needs_human') return { allow: true };
-  if (who === 'critic' && GREEN.has(kind) && greenOpen(state, line)) return { allow: true };
-  if (who === 'critic' && GREEN.has(kind)) return { allow: false, reason: 'filter' };
+  if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head)) return { allow: true };
   if (assignedR(line, who)) return { allow: true };
   return { allow: false, reason: 'filter' };
 }

@@ -102,6 +102,7 @@ const envOf = () => ({
   WAKE_KEY_FORGE: 'kf', WAKE_KEY_BLINKY: 'kb', WAKE_KEY_CRITIC: 'kc', WAKE_KEY_ARCH1: 'ka',
   WAKE_BATCH_S: '0', WAKE_STAGGER_MS: '0', WAKE_COALESCE_MS: '20', WAKE_RETRY_MS: '10', LIVE_TURN_OPEN_MIN: '0',
   WAKE_KIND_COOLDOWN_S: '0', WAKE_MAX_PER_HOUR: '60',
+  SEAT_WAKE_FILTER: 'all',
 });
 const start = async () => {
   let logs = '';
