@@ -14,6 +14,7 @@
 // stored and not rung for that seat. Other seats still wake. Packet R still rings the opener.
 // dumpBreaker / restoreBreaker write the comment counts and the pause so a restart can reload them.
 
+import { markDelivered } from './wake-filter.mjs';
 export const ROLLING_HOUR_MS = 60 * 60 * 1000;
 const COMMENT = new Set(['pr_comment', 'issue_comment', 'review_comment', 'comment']);
 export const SEAT_COMMENT_LIMIT = 3;
@@ -138,6 +139,15 @@ export function viewLine(line) {
   if (line && line.flag) out.flag = String(line.flag).slice(0, 40);
   if (line && line.kind) out.kind = String(line.kind).slice(0, 64);
   if (line && line.clock) out.clock = true;
+  for (const key of ['run_id', 'check_run_id', 'workflow_run_id', 'run_attempt', 'attempt', 'inbox_id']) {
+    const value = line && line[key];
+    if (value == null || value === '') continue;
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    else {
+      const text = String(value).trim();
+      if (text) out[key] = text.slice(0, 80);
+    }
+  }
   return out;
 }
 
@@ -398,6 +408,7 @@ export function noteSent(state, seat, lines, now) {
       if (state.queuedSha.get(key) === sha) state.queuedSha.delete(key);
     }
     state.cool.set(coolKeyOf(seat, line), now);
+    markDelivered(state, seat, line);
   }
   if (counted) {
     const arr = (state.sentAt.get(seat) || []).concat(now).filter(t => now - t < 48 * 3600000);
@@ -405,6 +416,13 @@ export function noteSent(state, seat, lines, now) {
   }
   const last = lines[lines.length - 1] || {};
   state.sent.push({ t: now, seat, id: String(last.id || '') });
+}
+
+// flushWake calls this with the webhook result. A failed post leaves the delivered book unmarked.
+export function recordFlush(state, seat, lines, result, now) {
+  if (!result || result.ok !== true || result.outcome === 'skipped') return false;
+  noteSent(state, seat, Array.isArray(lines) ? lines : [], now);
+  return true;
 }
 
 export function releaseDue(state, now, cfg) {

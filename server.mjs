@@ -22,7 +22,7 @@ import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallS
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
 import { readWakeFilter, allowWake, owedSeat, commitWake, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
@@ -443,6 +443,19 @@ function headOfLine(line) {
   if (!card) return '';
   return String(card.sha || card.head_sha || card.head || '').trim();
 }
+function headUpdatedAt(card) {
+  if (!card) return 0;
+  const head = String(card.sha || card.head_sha || card.head || '').trim().toLowerCase();
+  if (!head) return 0;
+  let latest = 0;
+  for (const beat of Array.isArray(card.beats) ? card.beats : []) {
+    const sha = String(beat && beat.sha || '').trim().toLowerCase();
+    if (!sha || !(sha === head || head.startsWith(sha) || sha.startsWith(head))) continue;
+    const t = Number(beat.t) || Date.parse(beat && (beat.t_ct || beat.t) || '') || 0;
+    if (t > latest) latest = t;
+  }
+  return latest;
+}
 function wakeFilterConfig() {
   let roster = null;
   try {
@@ -597,8 +610,10 @@ function offerLines(lines) {
       recordSkip(seat, w.line, 'own_actor');
       continue;
     }
+    const card = cardOfLine(w.line);
     const kept = allowWake(wakeFilterConfig(), seat, w.line, {
       now, state: wakeState, owner: ownerOfLine(w.line), head: headOfLine(w.line),
+      headAt: headUpdatedAt(card),
       closed: itemClosed(w.line && w.line.repo, w.line && w.line.number),
     });
     if (!kept.allow) { recordSkip(seat, w.line, 'filter'); continue; }
@@ -786,7 +801,7 @@ async function flushWake(seat) {
     if (!result.ok) st.status.error = result.error || 'network';
     console.log(`wake: ${seat} ${result.ok ? 'ok' : 'fail'} attempts=${result.attempts}${result.ok ? '' : ' ' + st.status.error}${result.detail ? ' body=' + JSON.stringify(result.detail) : ''}`);
     if (result.ok) {
-      noteSent(wakeState, seat, batch, Date.now());
+      recordFlush(wakeState, seat, batch, result, Date.now());
       touchSeat(seat); wakeOkAt[seat] = st.status.at; persistWakeOk();
       serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
     }

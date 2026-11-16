@@ -56,14 +56,15 @@ function cancelled(line) {
   return /\bcancell?ed\b/.test(text) || /\bskipped\b/.test(text);
 }
 
-function currentHead(line, head) {
+function currentHead(line, head, ctx) {
   if (cancelled(line)) return false;
   const sha = String(line && line.sha || '').trim().toLowerCase();
   // An empty sha is not a superseded head. That ci_fail wakes.
   if (!sha) return true;
   const cur = String(head || '').trim().toLowerCase();
   if (!cur) return true;
-  return sha === cur || cur.startsWith(sha) || sha.startsWith(cur);
+  if (sha === cur || cur.startsWith(sha) || sha.startsWith(cur)) return true;
+  return !staleHead(line, { ...(ctx || {}), head: cur });
 }
 
 function assignedR(line, seat) {
@@ -75,14 +76,145 @@ function assignedR(line, seat) {
 
 const PASS = new Set(['success', 'skipped', 'neutral']);
 const CLOSED = new Set(['merged', 'merge', 'pr_close', 'issue_close', 'pr_closed', 'issue_closed', 'closed']);
+const REOPEN = new Set(['reopen', 'pr_reopen', 'issue_reopen', 'reopened']);
+const AFTER_CLOSE = new Set(['deploy', 'deploy_fail', 'op_deploy', 'merge', 'merged', 'retest', 'pr_review', 'review_comment']);
+const CI_KIND = new Set(['ci_fail', 'ci_pass', 'check_run', 'check_suite', 'workflow_run', 'commit_status']);
+const PUSH_KIND = new Set(['pr_force_push', 'force_push', 'pr_commit', 'pr_update', 'push']);
 const GREEN_REASON = 'CI green on current head';
 const RUN_PAGES = 20;
 const RERUN_MS = 60 * 1000;
+// This process only. A redeploy drops the book and fails open, so a duplicate wake is possible.
+const DELIVERED_CAP = 2000;
 
-function slots(state) {
-  if (!state.stationAt) state.stationAt = new Map();
-  if (!Array.isArray(state.greenHeads)) state.greenHeads = [];
-  return state;
+function lineSha(line) {
+  return String(line && (line.sha || line.head_sha || line.head) || '').trim().toLowerCase();
+}
+
+function lineKind(line) {
+  return String(line && (line.kind || line.type) || '').trim().toLowerCase();
+}
+
+function runMark(line) {
+  const raw = line && (line.run_id ?? line.check_run_id ?? line.workflow_run_id);
+  if (raw != null && String(raw).trim()) return 'run:' + String(raw).trim();
+  const attempt = line && (line.run_attempt ?? line.attempt);
+  if (attempt != null && attempt !== '' && Number.isFinite(Number(attempt))) return 'attempt:' + Number(attempt);
+  const kind = lineKind(line);
+  if (CI_KIND.has(kind) || PUSH_KIND.has(kind)) {
+    const id = String(line && (line.inbox_id || line.id) || '').trim();
+    if (id) return 'id:' + id;
+  }
+  return '';
+}
+
+function deliveredKey(who, line) {
+  const repo = String(line && line.repo || '').trim().toLowerCase();
+  const n = Number(line && line.number);
+  const sha = lineSha(line);
+  const kind = lineKind(line);
+  if (!who || !repo || !Number.isInteger(n) || n < 1 || !sha || !kind) return '';
+  const mark = runMark(line);
+  const base = `${who}|${repo}#${n}|${sha}|${kind}`;
+  return mark ? `${base}|${mark}` : base;
+}
+
+function prMark(who, line) {
+  const repo = String(line && line.repo || '').trim().toLowerCase();
+  const n = Number(line && line.number);
+  if (!who || !repo || !Number.isInteger(n) || n < 1) return '';
+  return `${who}|${repo}#${n}`;
+}
+
+function capBook(book) {
+  while (book.ids.size > DELIVERED_CAP) {
+    const old = book.ids.values().next().value;
+    book.ids.delete(old);
+    book.idPr.delete(old);
+  }
+  while (book.keys.size > DELIVERED_CAP) book.keys.delete(book.keys.values().next().value);
+}
+
+// Per seat. Written from noteSent after the webhook succeeds, not at enqueue.
+export function markDelivered(state, seat, line) {
+  if (!state || !line || stationLine(line)) return;
+  const who = String(seat || line.seat || '').toLowerCase();
+  if (!who) return;
+  const book = slots(state).delivered;
+  const id = String(line.inbox_id || line.id || '').trim();
+  const pr = prMark(who, line);
+  if (id) {
+    const token = `${who}|${id}`;
+    book.ids.delete(token);
+    book.ids.add(token);
+    if (pr) book.idPr.set(token, pr);
+  }
+  const key = deliveredKey(who, line);
+  if (key) {
+    book.keys.delete(key);
+    book.keys.add(key);
+  }
+  capBook(book);
+}
+
+function alreadyDelivered(state, seat, line) {
+  if (!state || !line || stationLine(line) || !state.delivered) return false;
+  const who = String(seat || line.seat || '').toLowerCase();
+  if (!who) return false;
+  const book = state.delivered;
+  const id = String(line.inbox_id || line.id || '').trim();
+  if (id && book.ids.has(`${who}|${id}`)) return true;
+  const key = deliveredKey(who, line);
+  return !!key && book.keys.has(key);
+}
+
+function clearDelivered(state, seat, line) {
+  if (!state || !state.delivered) return;
+  const who = String(seat || line.seat || '').toLowerCase();
+  const pr = prMark(who, line);
+  if (!pr) return;
+  const book = state.delivered;
+  const prefix = pr + '|';
+  for (const key of book.keys) if (key.startsWith(prefix)) book.keys.delete(key);
+  for (const [token, mark] of book.idPr) if (mark === pr) {
+    book.ids.delete(token);
+    book.idPr.delete(token);
+  }
+}
+
+function lineAt(line) {
+  const parsed = Date.parse(line && (line.t_ct || line.created_at) || '');
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  const n = Number(line && line.t);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// The card head is a board snapshot. Drop only when that snapshot moved after this sha.
+function staleHead(line, ctx) {
+  const sha = lineSha(line);
+  const cur = String(ctx && ctx.head || '').trim().toLowerCase();
+  if (!sha || !cur) return false;
+  if (sha === cur || cur.startsWith(sha) || sha.startsWith(cur)) return false;
+  const at = lineAt(line);
+  const headAt = Number(ctx && ctx.headAt) || 0;
+  if (!at || !headAt) return false;
+  return headAt > at;
+}
+
+function survivesClose(line) {
+  const kind = lineKind(line);
+  if (REVIEW.has(kind) || AFTER_CLOSE.has(kind)) return true;
+  return kind.startsWith('deploy') || kind.startsWith('lab_retest');
+}
+
+function dropBeforePost(state, seat, line, ctx) {
+  if (REOPEN.has(lineKind(line))) {
+    clearDelivered(state, seat, line);
+    return false;
+  }
+  if (alreadyDelivered(state, seat, line)) return true;
+  if (ctx && (ctx.closed || lineClosed(line)) && !survivesClose(line)) return true;
+  if (staleHead(line, ctx)) return true;
+  return false;
 }
 
 export function fullHeadSha(line) {
@@ -412,6 +544,13 @@ export function criticGreenLine(ev, checks, opts = {}) {
   };
 }
 
+function slots(state) {
+  if (!state.stationAt) state.stationAt = new Map();
+  if (!Array.isArray(state.greenHeads)) state.greenHeads = [];
+  if (!state.delivered) state.delivered = { ids: new Set(), keys: new Set(), idPr: new Map() };
+  return state;
+}
+
 function stationOpen(state, seat, now) {
   const prev = slots(state).stationAt.get(seat) || 0;
   return !(prev && now - prev < HOUR_MS);
@@ -419,6 +558,7 @@ function stationOpen(state, seat, now) {
 
 // The station hour lives on the wake state. Seen green heads are written with the breaker file.
 // Call this only after the gate sends or queues. A skip must leave the slot open.
+// The delivered book is not written here. noteSent writes it after the webhook succeeds.
 export function commitWake(state, seat, line, now) {
   const book = slots(state);
   const who = String(seat || '').toLowerCase();
@@ -473,8 +613,9 @@ export function owedSeat(card, idOf) {
 
 export function allowWake(config, seat, line, ctx) {
   const who = String(seat || '').toLowerCase();
+  const state = ctx && ctx.state;
+  if (dropBeforePost(state, who, line, ctx || {})) return { allow: false, reason: 'filter' };
   if (filterMode(config, who) === 'all') return { allow: true };
-  const state = ctx.state;
   const now = ctx.now;
   if (stationLine(line)) return stationOpen(state, who, now) ? { allow: true } : { allow: false, reason: 'filter' };
   const kind = kindOf(line);
@@ -484,7 +625,9 @@ export function allowWake(config, seat, line, ctx) {
   if (/^nudge L\d/i.test(String(line.reason || ''))) return { allow: true };
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
-  if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head)) return { allow: true };
+  if (REOPEN.has(kind) && ctx.owner === who) return { allow: true };
+  if ((ctx.closed || lineClosed(line)) && survivesClose(line) && ctx.owner === who) return { allow: true };
+  if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head, ctx)) return { allow: true };
   if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) {
     if (ctx.closed || lineClosed(line) || !fullHeadSha(line) || greenSeen(state, line)) return { allow: false, reason: 'filter' };
     return { allow: true };
