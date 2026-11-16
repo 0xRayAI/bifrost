@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, wakeConfig } from '../wake-gate.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode } from '../wake-filter.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen } from '../wake-filter.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -68,6 +68,218 @@ test('near or mill get an R assignment, and a green head does not wake', () => {
   assert.equal(allowWake(on, 'mill', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'near', line({ type: 'pr_open', raci: 'R=near A=forge' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'pr_open', reason: 'packet R' }), ctx()).allow, false);
+});
+
+test('critic wakes once when every actions run is green, and a partial head stays quiet', () => {
+  const full = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const short = full.slice(0, 12);
+  const runs = [
+    { name: 'unit', status: 'completed', conclusion: 'success' },
+    { name: 'lint', status: 'completed', conclusion: 'skipped' },
+    { name: 'docs', status: 'completed', conclusion: 'neutral' },
+  ];
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha: short, head_sha: full };
+  assert.equal(criticGreenLine(ev, [], {}), null);
+  assert.equal(criticGreenLine(ev, [{ name: 'unit', status: 'queued', conclusion: null }], {}), null);
+  assert.equal(criticGreenLine(ev, [runs[0], { name: 'lint', status: 'in_progress', conclusion: '' }], {}), null);
+  assert.equal(criticGreenLine(ev, [{ name: 'unit', status: 'completed', conclusion: 'failure' }], {}), null);
+  const ping = criticGreenLine(ev, runs, {});
+  assert.equal(ping.sha, full);
+  assert.equal(ping.seat, 'critic');
+  const state = createWakeState();
+  assert.equal(allowWake(on, 'critic', ping, ctx({ state })).allow, true);
+  commitWake(state, 'critic', ping, NOW);
+  assert.equal(allowWake(on, 'critic', { ...ping, sha: short }, ctx({ state })).allow, false);
+  const newer = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const again = criticGreenLine({ ...ev, sha: newer, head_sha: newer }, runs, {});
+  assert.equal(allowWake(on, 'critic', again, ctx({ state })).allow, true);
+});
+
+test('one green run does not wake while another has not reported', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    const page = Number(new URL(url).searchParams.get('page') || '1');
+    if (page === 1) {
+      return { ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
+        { name: 'unit', status: 'completed', conclusion: 'success' },
+      ] }) };
+    }
+    return { ok: false, status: 500, json: async () => ({}) };
+  };
+  const runs = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl });
+  assert.equal(runs, null);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, runs || [], {}), null);
+  assert.match(urls[0], /\/actions\/runs\?/);
+  assert.match(urls[0], new RegExp('head_sha=' + sha));
+  assert.equal(urls.some(url => url.includes('check-runs') || url.includes('check-suites')), false);
+});
+
+test('an unset read token does not fetch actions runs', async () => {
+  let called = false;
+  const runs = await githubHeadRuns('0xRayAI/clearing', '3781168cc00a136b458ebdd97be1399ea195da29', {
+    token: '', fetch: async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; },
+  });
+  assert.equal(runs, null);
+  assert.equal(called, false);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha: '3781168cc00a136b458ebdd97be1399ea195da29' }, runs || [], {}), null);
+});
+
+test('a sha is fetched once, and a 403 is logged once', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const state = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return { ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
+      { name: 'ci', status: 'completed', conclusion: 'success' },
+    ] }) };
+  };
+  const first = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl, state, now: 1 });
+  const second = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl, state, now: 2 });
+  assert.deepEqual(second, first);
+  assert.equal(calls, 1);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, first, {}).sha, sha);
+
+  const denied = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+  const logs = [];
+  let hits = 0;
+  const denyFetch = async () => { hits += 1; return { ok: false, status: 403, json: async () => ({}) }; };
+  const opt = { token: 'ghs_test', fetch: denyFetch, state: denied, backoffMs: 5000, log: (line) => logs.push(line) };
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 1000 }), null);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 2000 }), null);
+  assert.equal(hits, 1);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /403/);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 7000 }), null);
+  assert.equal(hits, 2);
+  assert.equal(logs.length, 1);
+});
+
+test('a pending head is fetched again after 60s and wakes once it is green', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const other = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const state = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+  let phase = 'pending';
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    calls += 1;
+    const head = new URL(url).searchParams.get('head_sha');
+    const conclusion = phase === 'green' && head === sha ? 'success' : null;
+    const status = conclusion ? 'completed' : 'in_progress';
+    return { ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
+      { name: 'ci', workflow_id: 4, event: 'pull_request', run_attempt: 1, status, conclusion },
+    ] }) };
+  };
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha };
+  const opt = { token: 'ghs_test', fetch: fetchImpl, state, gapMs: 60_000 };
+  const pending = await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 0 });
+  assert.equal(criticGreenLine(ev, pending || [], {}), null);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 30_000 }), null);
+  assert.equal(calls, 1);
+  const switched = await githubHeadRuns('0xRayAI/clearing', other, { ...opt, now: 30_000 });
+  assert.equal(calls, 2);
+  assert.equal(criticGreenLine({ ...ev, sha: other, head_sha: other }, switched || [], {}), null);
+  phase = 'green';
+  const green = await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 60_000 });
+  assert.equal(calls, 3);
+  const ping = criticGreenLine(ev, green, {});
+  assert.equal(ping && ping.sha, sha);
+  assert.equal(await githubHeadRuns('0xRayAI/clearing', sha, { ...opt, now: 120_000 }), green);
+  assert.equal(calls, 3);
+});
+
+test('a failed attempt does not block the successful re-run', async () => {
+  const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
+    { name: 'ci', workflow_id: 9, event: 'pull_request', run_attempt: 2, status: 'completed', conclusion: 'success' },
+    { name: 'ci', workflow_id: 9, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'failure' },
+  ] }) });
+  const runs = await githubHeadRuns('0xRayAI/clearing', sha, { token: 'ghs_test', fetch: fetchImpl });
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].run_attempt, 2);
+  assert.equal(criticGreenLine({ repo: '0xRayAI/clearing', number: 28, sha }, runs, {}).sha, sha);
+});
+
+test('noteCi retries a pending sha after the gap and wakes once', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  try {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      const done = calls > 1;
+      return { ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
+        { name: 'A', workflow_id: 1, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'success' },
+        { name: 'B', workflow_id: 2, event: 'pull_request', run_attempt: 1, status: done ? 'completed' : 'in_progress', conclusion: done ? 'success' : null },
+      ] }) };
+    };
+    const sha = '3781168cc00a136b458ebdd97be1399ea195da29';
+    const wake = createWakeState();
+    const wakes = [];
+    const heads = createCriticHeads({
+      state: { fetched: new Map(), quietUntil: 0, deniedLogged: false },
+      token: () => 'ghs_test',
+      api: () => 'https://api.github.com',
+      fetch: fetchImpl,
+      seen: (repo, n, head) => greenSeen(wake, { repo, number: n, sha: head }),
+      deliver: (ping) => { wakes.push(ping); rememberGreen(wake, ping); },
+    });
+    const ev = { repo: '0xRayAI/clearing', number: 28, sha, kind: 'ci_pass' };
+    await heads.noteCi(ev, 28);
+    assert.equal(wakes.length, 0);
+    assert.equal(calls, 1);
+    await heads.noteCi({ ...ev, name: 'B' }, 28);
+    assert.equal(wakes.length, 0);
+    assert.equal(calls, 1);
+    mock.timers.tick(60_000);
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(wakes.length, 1);
+    assert.equal(calls, 2);
+    mock.timers.tick(60_000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(wakes.length, 1);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('a merged or closed pull does not wake critic', () => {
+  const checks = [
+    { name: 'unit', status: 'completed', conclusion: 'success' },
+  ];
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha: '3781168cc00a136b458ebdd97be1399ea195da29' };
+  assert.equal(criticGreenLine({ ...ev, merged: true }, checks, {}), null);
+  assert.equal(criticGreenLine({ ...ev, state: 'closed' }, checks, {}), null);
+  assert.equal(criticGreenLine({ ...ev, kind: 'merged' }, checks, {}), null);
+  assert.equal(criticGreenLine(ev, checks, { closed: true }), null);
+  const ping = criticGreenLine(ev, checks, {});
+  assert.equal(allowWake(on, 'critic', ping, ctx({ closed: true })).allow, false);
+});
+
+test('a seen green head survives a restart, and a short sha is the full sha', () => {
+  const full = '3781168cc00a136b458ebdd97be1399ea195da29';
+  const short = full.slice(0, 12);
+  const checks = [
+    { name: 'unit', status: 'completed', conclusion: 'success' },
+  ];
+  const ev = { repo: '0xRayAI/clearing', number: 28, sha: short };
+  const early = criticGreenLine(ev, checks, {});
+  assert.equal(early.sha, short);
+  const state = createWakeState();
+  commitWake(state, 'critic', early, NOW);
+  const later = criticGreenLine({ ...ev, sha: short, head_sha: full }, checks, {});
+  assert.equal(later.sha, full);
+  assert.equal(allowWake(on, 'critic', later, ctx({ state })).allow, false);
+  assert.equal(rememberGreen(state, later), true);
+  assert.equal(state.greenHeads[0].sha, full);
+  const disk = JSON.parse(JSON.stringify({ seatComments: {}, breaker: {}, greenHeads: dumpGreenHeads(state) }));
+  const fresh = createWakeState();
+  restoreGreenHeads(fresh, disk);
+  assert.equal(fresh.greenHeads[0].sha, full);
+  assert.equal(allowWake(on, 'critic', later, ctx({ state: fresh })).allow, false);
+  assert.equal(allowWake(on, 'critic', { ...later, sha: short, head_sha: '' }, ctx({ state: fresh })).allow, false);
 });
 
 test('a bare comment does not wake, and a review on the owed seat does', () => {

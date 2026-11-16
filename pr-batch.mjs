@@ -184,6 +184,7 @@ export function createBatch() {
         check = { name, required: ev.required !== false };
         row.checks.push(check);
       }
+      if (ev.kind) check.kind = String(ev.kind).toLowerCase();
       if (ev.status) check.status = String(ev.status).toLowerCase();
       const conclusion = ev.conclusion || (ev.kind === 'ci_pass' ? 'success' : ev.kind === 'ci_fail' ? 'failure' : '');
       if (conclusion) check.conclusion = String(conclusion).toLowerCase();
@@ -203,6 +204,11 @@ export function createBatch() {
       if (wantWorker) return deliver(key, row, 'worker');
       if (wantCritic) return deliver(key, row, 'critic');
       return null;
+    },
+    checksOf(key) {
+      const row = slots.get(String(key || '').toLowerCase());
+      if (!row) return [];
+      return row.checks.map((item) => ({ ...item }));
     },
     drain(opts = {}) {
       const out = [];

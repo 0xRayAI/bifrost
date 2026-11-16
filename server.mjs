@@ -23,7 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGith
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, noteSent, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
-import { readWakeFilter, allowWake, owedSeat, commitWake } from './wake-filter.mjs';
+import { readWakeFilter, allowWake, owedSeat, commitWake, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -599,6 +599,7 @@ function offerLines(lines) {
     }
     const kept = allowWake(wakeFilterConfig(), seat, w.line, {
       now, state: wakeState, owner: ownerOfLine(w.line), head: headOfLine(w.line),
+      closed: itemClosed(w.line && w.line.repo, w.line && w.line.number),
     });
     if (!kept.allow) { recordSkip(seat, w.line, 'filter'); continue; }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
@@ -864,13 +865,18 @@ function persistWakeBreaker() {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     const file = path.join(STATE_DIR, 'wake-breaker.json');
-    fs.writeFileSync(file + '.tmp', JSON.stringify(dumpBreaker(wakeState)));
+    const body = dumpBreaker(wakeState);
+    body.greenHeads = dumpGreenHeads(wakeState);
+    fs.writeFileSync(file + '.tmp', JSON.stringify(body));
     fs.renameSync(file + '.tmp', file);
   } catch (e) { console.log('wake: breaker save failed ' + ((e && e.code) || 'write')); }
 }
 function loadWakeBreaker() {
-  try { restoreBreaker(wakeState, JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'wake-breaker.json'), 'utf8'))); }
-  catch { /* no breaker file yet */ }
+  try {
+    const dump = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'wake-breaker.json'), 'utf8'));
+    restoreBreaker(wakeState, dump);
+    restoreGreenHeads(wakeState, dump);
+  } catch { /* no breaker file yet */ }
 }
 Object.assign(wakeOkAt, readWakeOk(path.join(STATE_DIR, 'wake-ok.json')));
 const NUDGE_L1_MS = (Number(process.env.NUDGE_L1_S) || 3600) * 1000, NUDGE_L2_MS = (Number(process.env.NUDGE_L2_S) || 1800) * 1000;
@@ -1250,14 +1256,28 @@ function storeFlush(src, out) {
   if (src && src.flag === 'hotfix') line.flag = 'hotfix';
   return line;
 }
+const actionRuns = { fetched: new Map(), quietUntil: 0, deniedLogged: false };
+const actionHeadRetry = createCriticHeads({
+  state: actionRuns,
+  token: () => String(process.env.GITHUB_READ_TOKEN || '').trim(),
+  api: () => GITHUB_API,
+  closed: (repo, n, ev) => itemClosed(repo, n) || lineClosed(ev),
+  seen: (repo, n, sha) => greenSeen(wakeState, { repo, number: n, sha }),
+  log: (line) => console.log(line),
+  deliver: (ping) => {
+    if (!ping) return;
+    if (!greenSeen(wakeState, ping)) postSeatLines({ lines: [ping] }, null);
+    else if (rememberGreen(wakeState, ping)) persistWakeBreaker();
+  },
+});
 function noteCi(ev) {
   const repo = String(ev && ev.repo || '').toLowerCase();
   const n = Number(ev && ev.number);
   const key = repo && Number.isInteger(n) ? repo + '#' + n : '';
   const out = batch.observeCi(ev, { attention: attentionNow(), busy: key ? batch.busy(key) || prBusy({ repo, number: n }) : false });
   const line = storeFlush(ev, out);
-  if (!line) return;
-  postSeatLines({ lines: [line] }, null);
+  if (line) postSeatLines({ lines: [line] }, null);
+  void actionHeadRetry.noteCi(ev, n);
 }
 function takeBatch(lines) {
   const kept = [];
