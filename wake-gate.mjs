@@ -55,7 +55,7 @@ export function defaultIssueSeat(env = {}) {
 export function createWakeState() {
   return {
     sentSha: new Map(), queuedSha: new Map(), cool: new Map(), sentAt: new Map(), turnOpen: new Map(),
-    commentSha: new Map(), seatComments: new Map(), breaker: new Map(),
+    commentSha: new Map(), seatComments: new Map(), breaker: new Map(), woken: new Set(),
     hold: [], sent: [], skips: [],
   };
 }
@@ -74,6 +74,70 @@ export function hasSha(line) {
   return !!(line && typeof line.sha === 'string' && line.sha.trim());
 }
 function shaOf(line) { return hasSha(line) ? line.sha.trim() : ''; }
+
+const OPEN_CARD = new Set(['issue_open', 'pr_open']);
+
+// Persisted after a 2xx delivery. Open cards ignore the line id. A sha keeps a new head distinct.
+export function wokenItemKey(seat, line) {
+  const who = String(seat || '').trim().toLowerCase();
+  if (!who || !line) return '';
+  const kind = typeOf(line);
+  if (kind === 'station' || String(line.id || '').startsWith('nudge:station:')) return '';
+  const repo = String(line.repo || '').trim().toLowerCase();
+  const n = Number(line.number);
+  const sha = shaOf(line).toLowerCase();
+  const id = String(line.id || '').trim();
+  if (OPEN_CARD.has(kind) && repo && Number.isInteger(n) && n > 0) return `${who}|${repo}#${n}|${kind}`;
+  if (sha && kind && repo && Number.isInteger(n) && n > 0) return `${who}|${repo}#${n}|${kind}|${sha}`;
+  if (id) return `${who}|${id}`;
+  return '';
+}
+
+function wokenSet(state) {
+  if (!state.woken) state.woken = new Set();
+  return state.woken;
+}
+
+export function rememberWoken(state, seat, line) {
+  const key = wokenItemKey(seat, line);
+  if (!key) return;
+  wokenSet(state).add(key);
+  if (state.waking) state.waking.delete(key);
+}
+
+function wakingSet(state) {
+  if (!state.waking) state.waking = new Set();
+  return state.waking;
+}
+
+export function releaseWaking(state, seat, lines) {
+  for (const line of lines || []) {
+    const key = wokenItemKey(seat, line);
+    if (key && state.waking) state.waking.delete(key);
+  }
+}
+
+function claimWoken(state, seat, line) {
+  if (isHotfix(line)) return;
+  const key = wokenItemKey(seat, line);
+  if (key) wakingSet(state).add(key);
+}
+
+export function loadWoken(state, keys) {
+  const set = wokenSet(state);
+  for (const key of Array.isArray(keys) ? keys : []) if (typeof key === 'string' && key) set.add(key);
+}
+
+export function dumpWoken(state) {
+  return [...wokenSet(state)];
+}
+
+// Visible nudge rows are trimmed. The stored level is not, so L3 does not start over.
+export function nextLineNudge(stored, visible) {
+  const count = Math.max(Number(stored) || 0, Number(visible) || 0);
+  if (count >= 3) return 0;
+  return count + 1;
+}
 
 export function labelsOf(line) {
   const raw = line && line.labels;
@@ -366,6 +430,10 @@ export function gateLine(wake, state, now, cfg) {
     if (inTurn) return { op: 'queue', until: turnAt + cfg.turnOpenMs, seat, line };
     return { op: 'send', seat, line };
   }
+  const woke = wokenItemKey(seat, line);
+  if (!isHotfix(line) && woke && (wokenSet(state).has(woke) || (state.waking && state.waking.has(woke)))) {
+    return { op: 'skip', reason: 'already_woke', seat, line };
+  }
   const sha = shaOf(line);
   const shaKey = shaKeyOf(seat, line);
   const sentSha = state.sentSha.get(shaKey) || '';
@@ -390,8 +458,10 @@ export function gateLine(wake, state, now, cfg) {
   if (!freshSha && !hotfix && over) return { op: 'skip', reason: 'rate', seat, line };
   if (until > now) {
     if (sha) state.queuedSha.set(shaKey, sha);
+    claimWoken(state, seat, line);
     return { op: 'queue', until, seat, line };
   }
+  claimWoken(state, seat, line);
   return { op: 'send', seat, line };
 }
 
@@ -409,6 +479,7 @@ export function noteSent(state, seat, lines, now) {
     }
     state.cool.set(coolKeyOf(seat, line), now);
     markDelivered(state, seat, line);
+    rememberWoken(state, seat, line);
   }
   if (counted) {
     const arr = (state.sentAt.get(seat) || []).concat(now).filter(t => now - t < 48 * 3600000);

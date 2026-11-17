@@ -22,7 +22,7 @@ import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallS
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker } from './wake-gate.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking } from './wake-gate.mjs';
 import { readWakeFilter, allowWake, owedSeat, commitWake, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
@@ -802,9 +802,10 @@ async function flushWake(seat) {
     console.log(`wake: ${seat} ${result.ok ? 'ok' : 'fail'} attempts=${result.attempts}${result.ok ? '' : ' ' + st.status.error}${result.detail ? ' body=' + JSON.stringify(result.detail) : ''}`);
     if (result.ok) {
       recordFlush(wakeState, seat, batch, result, Date.now());
+      persistWoken();
       touchSeat(seat); wakeOkAt[seat] = st.status.at; persistWakeOk();
       serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
-    }
+    } else releaseWaking(wakeState, seat, batch);
   }
   st.inflight = false;
   const last = batch[batch.length - 1] || {};
@@ -1176,6 +1177,35 @@ setInterval(() => auditRouting().catch(() => {}), (Number(process.env.BIFROST_RO
 // (default 900) gets nudge L1 and a re-wake of its seat; L2 and L3 follow one window apart, then it stops (never loops).
 // An ack, a handled cursor key, or the card moving on closes them. A handled or acked line gets no L1, L2, or L3.
 const NUDGE_LINE_MS = Math.max(1, Number(process.env.NUDGE_LINE_S) > 0 ? Number(process.env.NUDGE_LINE_S) : 900) * 1000;
+const lineNudgeLevel = new Map();
+function loadLineNudgeLevels() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'line-nudge-levels.json'), 'utf8'));
+    if (raw && typeof raw === 'object') {
+      for (const [key, level] of Object.entries(raw)) {
+        const n = Number(level);
+        if (key && Number.isInteger(n) && n > 0) lineNudgeLevel.set(key, n);
+      }
+    }
+  } catch { /* first boot */ }
+  for (const n of nudges) {
+    if (!n || n.kind !== 'line' || !n.line_key) continue;
+    const level = Number(n.level) || 0;
+    if (level > (lineNudgeLevel.get(n.line_key) || 0)) lineNudgeLevel.set(n.line_key, level);
+  }
+}
+function persistLineNudgeLevels() {
+  bfWrite('line-nudge-levels.json', JSON.stringify(Object.fromEntries(lineNudgeLevel)));
+}
+function loadWokenFile() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'woken-items.json'), 'utf8'));
+    loadWoken(wakeState, Array.isArray(raw) ? raw : []);
+  } catch { /* first boot */ }
+}
+function persistWoken() {
+  bfWrite('woken-items.json', JSON.stringify(dumpWoken(wakeState)));
+}
 function nudgeLines(now) {
   let changed = false;
   const open = new Set();
@@ -1189,12 +1219,14 @@ function nudgeLines(now) {
     const base = `nudge:line:${seat}:${l.id}`; open.add(base);
     const mine = nudges.filter(n => n.kind === 'line' && n.line_key === base);
     const last = mine[mine.length - 1];
-    if (mine.length >= 3 || (last && now - last.t < NUDGE_LINE_MS)) continue;
-    const lvl = mine.length + 1;
+    const lvl = nextLineNudge(lineNudgeLevel.get(base), mine.length);
+    if (!lvl || (last && now - last.t < NUDGE_LINE_MS)) continue;
     if (!wakeAllowed(fleetMode.mode, lineCard(l) || l)) continue;
     nudges.push({ id: `${base}:L${lvl}`, kind: 'line', line_key: base, t: now, t_ct: ctStamp(now), card: '', repo: l.repo || '',
       number: Number.isInteger(l.number) ? l.number : 0, title: String(l.title || '').slice(0, 120), url: String(l.url || '').slice(0, 300),
       stage: '', level: lvl, seat, via: 'unacked line', line: String(l.id).slice(0, 300), since: new Date(t).toISOString() });
+    lineNudgeLevel.set(base, lvl);
+    persistLineNudgeLevels();
     noteWake(seat, { ...l, reason: (`nudge L${lvl}: ` + (l.reason || '')).slice(0, 300) });
     changed = true;
   }
@@ -1456,6 +1488,8 @@ const arch1Launch = createArch1Launch({
   cardOnBoard: key => bfCards.some(c => c && String(c.key || '').toLowerCase() === String(key || '').toLowerCase()),
 });
 try { nudges = fs.readFileSync(path.join(STATE_DIR, 'nudges.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
+loadLineNudgeLevels();
+loadWokenFile();
 initArchive(process.env.MESH_DATA_DIR || '/data');
 function seedTouchFromAcks() {
   for (const day of archiveDays()) {

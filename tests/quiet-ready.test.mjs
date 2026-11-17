@@ -17,7 +17,7 @@ test('a green head is not swallowed by the ready on that sha', () => {
   noteSent(state, 'critic', [ready], now);
   const again = gateLine({ seat: 'critic', line: ready }, state, now + 1000, cfg);
   assert.equal(again.op, 'skip');
-  assert.equal(again.reason, 'repeat_sha');
+  assert.equal(again.reason, 'already_woke');
   const strict = gateLine({ seat: 'critic', line: green }, state, now + 1000, cfg);
   assert.equal(strict.op, 'send');
 });
