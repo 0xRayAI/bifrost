@@ -15,7 +15,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
-import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk } from './presence.mjs';
+import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove } from './governor.mjs';
@@ -31,7 +31,7 @@ import { openHistory } from './history-store.mjs';
 import { oversizedCardDays, compactOversized } from './compact-cards.mjs';
 import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
-import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview } from './handoff.mjs';
+import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview, handoffKind, routeHandoff, commitInboxMove } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundary, wakeAllowed } from './fleet-mode.mjs';
 import { createBatch } from './pr-batch.mjs';
@@ -1347,6 +1347,43 @@ function sameStationDay(seat, line) {
   if (!hit || canonSeat(hit[1]) !== seat) return false;
   return String(line.kind || '').toLowerCase() === 'station';
 }
+function seatAvailability(name) {
+  const id = canonSeat(name);
+  if (!SEAT_IDS.includes(id)) return 'offline';
+  const now = Date.now();
+  const win = WINDOW_MIN * 60000;
+  let last = 0;
+  let working = false;
+  const touched = seatTouch[id];
+  if (Number.isFinite(touched)) last = touched;
+  const seats = header && header.fleet && header.fleet.seats;
+  const row = seats && seats[id];
+  if (row) {
+    const t = Date.parse(row.last_ct || '');
+    if (Number.isFinite(t)) last = Math.max(last, t);
+    working = !!(row.working || row.working_on);
+  }
+  return seatStatus({ last_ct: last ? new Date(last).toISOString() : '', working }, now, win);
+}
+function placeHandoff(line) {
+  if (!handoffKind(line)) return { queued: false };
+  const route = routeHandoff(cardOfLine(line), seatAvailability);
+  const seat = canonSeat(route.seat);
+  if (!seat || !SEAT_IDS.includes(seat)) return { queued: false };
+  line.seat = seat;
+  line.to = seat;
+  if (route.queued) line.behind = true;
+  return { seat, queued: !!route.queued };
+}
+function findInboxLine(id) {
+  for (const name of SEAT_IDS) {
+    const arr = seatInbox[name];
+    if (!arr) continue;
+    const hit = arr.find(row => row && row.id === id);
+    if (hit) return { seat: name, line: hit };
+  }
+  return null;
+}
 function postSeatLines(parsed, onlySeat) {
   const incoming = parsed && Array.isArray(parsed.lines) ? parsed.lines : null;
   if (!incoming || incoming.length > 5000) return { status: 400, error: 'lines required' };
@@ -1366,14 +1403,19 @@ function postSeatLines(parsed, onlySeat) {
   }
   const outgoing = takeBatch(good);
   const touched = new Set(); let added = 0; const fresh = [];
+  let routedSeat = '';
+  let routedQueued = false;
   if (parsed.replace === true && onlySeat && good.length && seatInbox[onlySeat]) {
     seatInbox[onlySeat].length = 0;
     touched.add(onlySeat);
   }
   for (const l of outgoing) {
+    const placed = placeHandoff(l);
+    if (placed.seat) { routedSeat = placed.seat; routedQueued = placed.queued; }
     const s = canonSeat(l.seat), arr = seatInbox[s];
     if (!arr) continue;
-    const dup = arr.find(x => x.id === l.id);
+    const prior = findInboxLine(l.id);
+    const dup = prior && prior.seat === s ? prior.line : null;
     if (dup) {
       if (sameStationDay(s, l)) {
         dup.t_ct = l.t_ct || ctStamp(Date.now());
@@ -1392,13 +1434,27 @@ function postSeatLines(parsed, onlySeat) {
     let stored = { ...l, seat: s };
     for (const k of ['from', 'to', 'kind', 'flag']) if (typeof stored[k] === 'string') stored[k] = stored[k].toLowerCase();
     if (s === 'arch1') stored = markShed(stored, seatOpenRows(s, false), queueOpts(s));
-    arr.push(stored); touched.add(s); added++; fresh.push(stored);
+    if (placed.queued) stored.behind = true;
+    if (prior && prior.seat !== s) {
+      commitInboxMove(
+        { [s]: seatInbox[s] || [], [prior.seat]: seatInbox[prior.seat] || [] },
+        stored,
+        (seat, rows) => { seatInbox[seat] = rows; saveSeatInbox(seat); },
+      );
+      touched.add(s);
+      touched.add(prior.seat);
+      if (!placed.queued) fresh.push(stored);
+      continue;
+    }
+    arr.push(stored); touched.add(s);
+    if (!prior) added++;
+    if (!placed.queued) fresh.push(stored);
     if (s === 'builder') { const c = seatInbox['builder-cloud']; if (!c.some(x => x.id === l.id)) { const copy = { ...stored, seat: 'builder-cloud' }; c.push(copy); touched.add('builder-cloud'); fresh.push(copy); } } }
   for (const s of touched) saveSeatInbox(s);
   if (fresh.length) { try { offerLines(fresh); } catch { /* keep the inbox write */ } }
   for (const l of fresh) ensurePacketCard(l);
   for (const l of fresh) void arch1Launch.consider(l);
-  return { status: 200, added, rejected: refs };
+  return { status: 200, added, rejected: refs, ...(routedSeat ? { seat: routedSeat, queued: routedQueued } : {}) };
 }
 // ---- Assistant / emitter: the sample MCP server posts one event per tool call / OAuth sign-in (POST /emit, Bearer = the
 // 'assistant' seat key, checked against SEAT_KEYS.assistant). Write-only and strict: tool name, time, ok, client class,
@@ -2133,7 +2189,27 @@ function mergedHeader(now = Date.now()) {
     h.roster = roster.names;
     h.roster_roles = roster.roles;
   }
+  if (h.fleet) h.fleet = stampSeatStatus(h.fleet, now, roster.names);
+  drainArch1Handoffs();
   return h;
+}
+function drainArch1Handoffs() {
+  const rows = seatInbox.arch1;
+  if (!Array.isArray(rows) || !rows.length) return;
+  const acked = ackedSet('arch1');
+  for (const line of rows.slice()) {
+    if (!handoffKind(line) || acked.has(line.id)) continue;
+    const copy = { ...line };
+    const placed = placeHandoff(copy);
+    if (!placed.seat || placed.seat === 'arch1') continue;
+    const stored = { ...copy, seat: placed.seat };
+    if (placed.queued) stored.behind = true;
+    commitInboxMove(
+      { [placed.seat]: seatInbox[placed.seat] || [], arch1: seatInbox.arch1 || [] },
+      stored,
+      (seat, next) => { seatInbox[seat] = next; saveSeatInbox(seat); },
+    );
+  }
 }
 function closedCardKeys() {
   const keys = new Set();
@@ -4226,7 +4302,7 @@ async function handle(req, res) {
     }
     const r = postSeatLines(parsed, null);
     if (r.status === 200) { seq++; header = mergedHeader(); fullDirty = true; }
-    return json(req, res, r.status, r.status === 200 ? { ok: true, added: r.added, rejected: r.rejected } : { error: r.error, ...(r.rejected ? { rejected: r.rejected } : {}) });
+    return json(req, res, r.status, r.status === 200 ? { ok: true, added: r.added, rejected: r.rejected, ...(r.seat ? { seat: r.seat, queued: !!r.queued } : {}) } : { error: r.error, ...(r.rejected ? { rejected: r.rejected } : {}) });
   }
   if (p === '/ingest/source') {
     if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
@@ -4405,7 +4481,7 @@ async function handle(req, res) {
       if (typeof hs !== 'string' || !hs || !safeEq(hs, INGEST_SECRET)) { req.resume(); return json(req, res, 401, { error: 'unauthorized' }); }
       let parsed; try { parsed = JSON.parse((await readBody(req, 1 << 20)).toString('utf8')); } catch { return json(req, res, 400, { error: 'not json' }); }
       const r = postSeatLines(parsed, 'builder');
-      return json(req, res, r.status, r.status === 200 ? { ok: true, added: r.added, rejected: r.rejected } : { error: r.error, ...(r.rejected ? { rejected: r.rejected } : {}) });
+      return json(req, res, r.status, r.status === 200 ? { ok: true, added: r.added, rejected: r.rejected, ...(r.seat ? { seat: r.seat, queued: !!r.queued } : {}) } : { error: r.error, ...(r.rejected ? { rejected: r.rejected } : {}) });
     }
     if (m !== 'GET') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, POST' });
     const h = req.headers.authorization || '';

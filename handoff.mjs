@@ -267,6 +267,73 @@ export function missingHandoffs({ events, lines, roles, loginToSeat, now, l1ms }
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const REVIEW_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9]\d{0,6})#(pullrequestreview-\d+|issuecomment-\d+|discussion_r\d+)$/;
 
+const HANDOFF_KINDS = new Set(['ready', 'critic_fail', 'live_pass', 'merge', 'ci_fail']);
+
+export function handoffKind(line) {
+  const type = lower(line && line.type);
+  const kind = lower(line && line.kind);
+  return type === 'packet' && HANDOFF_KINDS.has(kind);
+}
+
+function seatWord(value) {
+  return lower(value).split(/\s+/)[0].replace(/[^a-z0-9_-]/g, '');
+}
+
+function raciSeat(packet, letter) {
+  const text = String(packet && packet.raci || '');
+  const match = text.match(new RegExp(`\\b${letter}\\s*[=:]\\s*([A-Za-z][A-Za-z0-9_-]*)`, 'i'));
+  return match ? seatWord(match[1]) : '';
+}
+
+// Primary is packet R, or the author when R is absent. Secondary is A. Tertiary is next owner.
+export function handoffChain(card) {
+  const packet = card && card.packet && typeof card.packet === 'object' ? card.packet : {};
+  const responsible = raciSeat(packet, 'R');
+  const author = seatWord(card && (card.author || card.owner));
+  const accountable = raciSeat(packet, 'A');
+  const next = seatWord(packet['next owner'] || packet.next_owner);
+  const chain = [];
+  for (const seat of [responsible || author, accountable, next]) {
+    if (!seat || chain.includes(seat)) continue;
+    chain.push(seat);
+    if (chain.length === 3) break;
+  }
+  return chain;
+}
+
+// The new seat is written before the old seat drops the line.
+export function commitInboxMove(books, stored, write) {
+  const dest = stored && stored.seat;
+  if (!dest || !stored.id) return books;
+  const destRows = [...(books[dest] || []).filter(row => row && row.id !== stored.id), stored];
+  write(dest, destRows);
+  const next = { ...books, [dest]: destRows };
+  for (const seat of Object.keys(books)) {
+    if (seat === dest) continue;
+    const rows = books[seat] || [];
+    if (!rows.some(row => row && row.id === stored.id)) continue;
+    const kept = rows.filter(row => row && row.id !== stored.id);
+    write(seat, kept);
+    next[seat] = kept;
+  }
+  return next;
+}
+
+// Skip offline. A busy seat keeps the line and queues. No seat name is filled in here.
+export function routeHandoff(card, statusOf) {
+  const chain = handoffChain(card);
+  const status = seat => {
+    const got = typeof statusOf === 'function' ? statusOf(seat) : 'online';
+    return got === 'busy' || got === 'offline' ? got : 'online';
+  };
+  for (const seat of chain) {
+    const state = status(seat);
+    if (state === 'offline') continue;
+    return { seat, queued: state === 'busy', chain };
+  }
+  return { seat: chain[0] || '', queued: false, chain };
+}
+
 export function isHotfixTitle(title) {
   return /^hotfix:/i.test(text(title));
 }

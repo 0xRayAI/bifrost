@@ -828,7 +828,8 @@ footer a { color: var(--foot); }
       var row = rosterSeatRow(feed, a[0]);
       var last = row && row.last_ct ? String(row.last_ct) : '';
       var dormant = row && L.seatDormant && L.seatDormant(row.last_ct, Date.now()) ? '1' : '0';
-      return a[0] + '\n' + (a[1] || '') + '\n' + last + '\n' + dormant;
+      var status = row && row.status ? String(row.status) : '';
+      return a[0] + '\n' + (a[1] || '') + '\n' + last + '\n' + dormant + '\n' + status;
     }).join('\n');
     if (sig === paintRoster.sig) return;
     paintRoster.sig = sig;
@@ -843,16 +844,17 @@ footer a { color: var(--foot); }
       if (!L.LABEL[a[0]]) L.LABEL[a[0]] = a[0];
       var row = rosterSeatRow(feed, a[0]);
       var dormant = !!(row && L.seatDormant && L.seatDormant(row.last_ct, Date.now()));
+      var status = row && (row.status === 'online' || row.status === 'busy' || row.status === 'offline') ? row.status : '';
       var el = document.createElement('button');
       el.type = 'button';
-      el.className = 'seat' + (dormant ? ' dormant' : '');
+      el.className = 'seat' + (dormant ? ' dormant' : '') + (status ? ' seat-' + status : '');
       el.setAttribute('aria-expanded', 'false');
       var label = String(L.LABEL[a[0]] || a[0]);
       var roleText = String(a[1] || '');
       el.innerHTML = '<span class="dot"></span><span class="nm"></span>';
       var nm = el.querySelector('.nm');
       nm.textContent = label.toUpperCase();
-      nm.title = dormant ? label + ' · dormant' : label;
+      nm.title = status ? label + ' · ' + status : (dormant ? label + ' · dormant' : label);
       var ink = seatColor(a[0]);
       nm.style.setProperty('--nm', ink[0] + ', ' + ink[1] + ', ' + ink[2]);
       el.addEventListener('click', function () {

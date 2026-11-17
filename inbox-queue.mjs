@@ -20,6 +20,7 @@ export function lineRank(line, cardTitle = '') {
   const kind = String(line && line.kind || '').toLowerCase();
   const title = String(line && line.title || '');
   const text = lineText(line, cardTitle);
+  if (line && (line.behind === true || line.behind === '1')) return 2;
   if (type === 'packet' && HEAD_KINDS.has(kind)) return 0;
   if (/^hotfix:/i.test(title) || P_MARK.test(text)) return 1;
   if (kind === 'station') return 4;
