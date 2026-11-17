@@ -35,6 +35,26 @@ export function seatPresence(raw = process.env.SEAT_PRESENCE) {
   return out;
 }
 
+export function seatStatus(row, now = Date.now(), windowMs = 15 * 60000) {
+  const last = tsOf(row && row.last_ct);
+  const fresh = last > 0 && now - last <= windowMs;
+  const working = !!(row && (row.working || row.working_on));
+  if (!fresh) return 'offline';
+  return working ? 'busy' : 'online';
+}
+
+export function stampSeatStatus(fleet, now = Date.now(), extraNames = []) {
+  const base = fleet && typeof fleet === 'object' ? fleet : null;
+  if (!base && !extraNames.length) return fleet;
+  const seats = { ...(base && base.seats || {}) };
+  const win = ((base && base.window_min) || 15) * 60000;
+  for (const name of new Set([...Object.keys(seats), ...extraNames])) {
+    const row = seats[name] || {};
+    seats[name] = { ...row, status: seatStatus(row, now, win) };
+  }
+  return { ...(base || { window_min: 15, seats: {}, working: {}, active: 0, total: 0 }), seats };
+}
+
 export function presentSeat(seats, name, presence = seatPresence()) {
   let last = tsOf(seats?.[name]?.last_ct), working = !!seats?.[name]?.working;
   const want = String(name).toLowerCase();
