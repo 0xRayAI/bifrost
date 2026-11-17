@@ -458,7 +458,6 @@ export function gateLine(wake, state, now, cfg) {
   if (!freshSha && !hotfix && over) return { op: 'skip', reason: 'rate', seat, line };
   if (until > now) {
     if (sha) state.queuedSha.set(shaKey, sha);
-    claimWoken(state, seat, line);
     return { op: 'queue', until, seat, line };
   }
   claimWoken(state, seat, line);
