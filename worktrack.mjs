@@ -789,6 +789,127 @@ export function cloudIdsAlias(a, b) {
 }
 
 /** One row per agent. A short id and its full id fold together. Newest line wins state; a known seat, card, or PR stays. */
+const WORK_HANDOFF = new Set(['ready', 'critic_fail', 'live_pass', 'merge', 'ci_fail']);
+const NOT_CARD_OWNER = new Set(['builder-cloud', 'cloud', 'cloudagents', 'unassigned', 'others', 'github', 'ci', '']);
+
+function workSeatSet(seats) {
+  const source = seats && seats.length ? seats : SEAT_IDS;
+  return new Set(source.map((seat) => String(seat || '').toLowerCase()).filter((seat) => seat && !NOT_CARD_OWNER.has(seat)));
+}
+
+function workSeat(value, seats) {
+  const key = String(value || '').trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9_-]/g, '');
+  if (!key || NOT_CARD_OWNER.has(key)) return '';
+  return seats.has(key) ? key : '';
+}
+
+function workAt(row) {
+  const raw = Number(row && row.t);
+  if (Number.isFinite(raw) && raw > 0) return raw > 1e12 ? raw : raw * 1000;
+  const parsed = Date.parse((row && (row.t_ct || row.updated_ct || row.created_at)) || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function workKey(card) {
+  const key = String(card && card.key || '').trim();
+  if (key) return key.toLowerCase();
+  const repo = String(card && card.repo || '').trim();
+  const number = Number(card && card.number);
+  return repo && Number.isInteger(number) ? `${repo}#${number}`.toLowerCase() : '';
+}
+
+function sameWorkCard(card, ref) {
+  const want = workKey(card);
+  const got = String(cardRefOf(ref) || ref || '').trim().toLowerCase();
+  if (!want || !got) return false;
+  return want === got;
+}
+
+function seatForBc(bcId, agents, seats) {
+  const id = String(bcId || '').trim();
+  if (!id) return '';
+  for (const row of agents || []) {
+    if (!row || !cloudIdsAlias(row.bcId || row.agent, id)) continue;
+    const seat = workSeat(row.seat, seats) || workSeat(row.by, seats);
+    if (seat) return seat;
+  }
+  return '';
+}
+
+function seatForWorkCard(card, agents, seats) {
+  const key = workKey(card);
+  for (const row of agents || []) {
+    if (!row) continue;
+    const named = String(cardRefOf(row.card) || row.card || '').toLowerCase();
+    if (named !== key) continue;
+    const seat = workSeat(row.seat, seats) || workSeat(row.by, seats) || seatForBc(row.bcId || row.agent, agents, seats);
+    if (seat) return seat;
+  }
+  return '';
+}
+
+/**
+ * A cloud launch or reply, or a handoff, moves an open card to in_progress.
+ * The owner is the latest seat on a handoff, cloud line, or receipt.
+ * builder-cloud is a label: the seat is the one that owns that bc-.
+ */
+export function stampWorkCards(cards, { activity = [], lines = [], comments = [], agents = [], seats = [] } = {}) {
+  const seatSet = workSeatSet(seats);
+  const hits = [];
+  const note = (ref, seat, t, kind) => {
+    const key = String(cardRefOf(ref) || ref || '').trim().toLowerCase();
+    if (!key || !seat) return;
+    hits.push({ key, seat, t, kind });
+  };
+  for (const line of activity || []) {
+    if (!line || typeof line !== 'object') continue;
+    const kind = String(line.kind || '').toLowerCase();
+    if (kind !== 'cloud_agent' && kind !== 'agent') continue;
+    const action = String(line.action || '').toLowerCase();
+    if (action !== 'launch' && action !== 'reply') continue;
+    const seat = workSeat(line.seat, seatSet) || workSeat(line.by, seatSet) || seatForBc(line.agent, agents, seatSet);
+    note(line.tag || line.card || line.pr, seat, workAt(line), 'cloud');
+  }
+  for (const line of lines || []) {
+    if (!line || typeof line !== 'object') continue;
+    const type = String(line.type || '').toLowerCase();
+    const kind = String(line.kind || '').toLowerCase();
+    if (!(type === 'packet' && WORK_HANDOFF.has(kind)) && kind !== 'handoff' && type !== 'handoff') continue;
+    const seat = workSeat(line.to, seatSet) || workSeat(line.seat, seatSet) || workSeat(line.from, seatSet);
+    const ref = line.repo && line.number != null ? `${line.repo}#${line.number}` : (line.card || line.key);
+    note(ref, seat, workAt(line), 'handoff');
+  }
+  for (const row of comments || []) {
+    if (!row || typeof row !== 'object') continue;
+    const kind = String(row.kind || row.type || '').toLowerCase();
+    const blob = [row.label, row.title, row.detail, row.body, row.message].filter((part) => typeof part === 'string').join('\n');
+    const trailer = /(?:^|\n)\s*Seat:\s*([A-Za-z0-9-]{2,16})\s*(?:\n|$)/.exec(blob);
+    const receipt = kind === 'receipt' || /receipt/i.test(blob);
+    if (!receipt && !trailer) continue;
+    const seat = workSeat(trailer && trailer[1], seatSet) || workSeat(row.credit, seatSet) || workSeat(row.seat, seatSet) || workSeat(row.from, seatSet) || workSeat(row.author, seatSet);
+    const ref = row.repo && row.number != null ? `${row.repo}#${row.number}` : (row.card || row.key);
+    note(ref, seat, workAt(row), 'receipt');
+  }
+  return (Array.isArray(cards) ? cards : []).map((card) => {
+    if (!card || typeof card !== 'object') return card;
+    const key = workKey(card);
+    const mine = hits.filter((hit) => hit.key === key);
+    const latest = mine.reduce((best, hit) => (!best || hit.t >= best.t ? hit : best), null);
+    const mapped = seatForWorkCard(card, agents, seatSet);
+    const assignee = workSeat(card.assignee, seatSet) || workSeat(card.assignee_seat, seatSet);
+    const author = workSeat(card.author, seatSet) || workSeat(card.opener, seatSet) || workSeat(card.from, seatSet)
+      || (Array.isArray(card.labels) ? card.labels.map((label) => workSeat(label, seatSet)).find(Boolean) : '');
+    const current = workSeat(card.owner, seatSet);
+    const owner = (latest && latest.seat) || assignee || author || current || mapped || '';
+    const stage = String(card.stage || '').toLowerCase();
+    const working = mine.some((hit) => hit.kind === 'cloud' || hit.kind === 'handoff');
+    const nextStage = working && (stage === 'open' || stage === '') ? 'in_progress' : card.stage;
+    const nextOwner = owner || (NOT_CARD_OWNER.has(String(card.owner || '').toLowerCase()) ? '' : card.owner);
+    if (nextStage === card.stage && nextOwner === card.owner) return card;
+    return { ...card, stage: nextStage, owner: nextOwner };
+  });
+}
+
 export function foldCloudIds(rows) {
   const ordered = [...(rows || [])].sort((a, b) => (Date.parse(b && b.updated_ct) || 0) - (Date.parse(a && a.updated_ct) || 0));
   const folded = [];

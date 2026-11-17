@@ -21,7 +21,7 @@ import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } 
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
-import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, toToken } from './worktrack.mjs';
+import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking } from './wake-gate.mjs';
 import { readWakeFilter, allowWake, owedSeat, commitWake, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
@@ -1858,7 +1858,23 @@ function retouchNudge(n) {
   saveSeatInbox(seat);
 }
 // Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no nudge.
+function boardWorkSources() {
+  const lines = [];
+  for (const seat of Object.keys(seatInbox)) {
+    for (const line of seatInbox[seat] || []) lines.push(line);
+  }
+  let agents = [];
+  try { agents = cloudAgentBoard(); } catch { agents = []; }
+  return {
+    activity,
+    lines,
+    comments: githubEvents(),
+    agents,
+    seats: SEAT_IDS,
+  };
+}
 function evalNudges(now = Date.now()) {
+  bfCards = stampWorkCards(bfCards, boardWorkSources());
   let changed = applyStartAfter(now); const byKey = new Map(bfCards.map(c => [c.key, c]));
   for (const n of nudges) {
     if (n.closed_at || ['silent', 'line', 'unrouted', 'quiet', 'handoff'].includes(n.kind) || (n.kind === 'reassign' && (n.line_key || String(n.id || '').includes(':handoff:')))) continue;
@@ -2075,6 +2091,7 @@ function keepPush(beats, limit) {
 }
 function cardsView(list = bfCards) {   // cards with their nudges as distinct nudge beats
   applyStartAfter();
+  list = stampWorkCards(list, boardWorkSources());
   const by = new Map(); for (const n of nudges) { if (!by.has(n.card)) by.set(n.card, []); by.get(n.card).push(n); }
   const missing = new Set(nudges.filter(n => n.kind === 'handoff' && !n.closed_at).map(n => n.card));
   return list.map(c => {
