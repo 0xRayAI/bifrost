@@ -31,7 +31,7 @@ import { openHistory } from './history-store.mjs';
 import { oversizedCardDays, compactOversized } from './compact-cards.mjs';
 import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
-import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview, handoffKind, routeHandoff } from './handoff.mjs';
+import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview, handoffKind, routeHandoff, commitInboxMove } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundary, wakeAllowed } from './fleet-mode.mjs';
 import { createBatch } from './pr-batch.mjs';
@@ -1415,10 +1415,6 @@ function postSeatLines(parsed, onlySeat) {
     const s = canonSeat(l.seat), arr = seatInbox[s];
     if (!arr) continue;
     const prior = findInboxLine(l.id);
-    if (prior && prior.seat !== s) {
-      seatInbox[prior.seat] = seatInbox[prior.seat].filter(row => row.id !== l.id);
-      touched.add(prior.seat);
-    }
     const dup = prior && prior.seat === s ? prior.line : null;
     if (dup) {
       if (sameStationDay(s, l)) {
@@ -1439,6 +1435,17 @@ function postSeatLines(parsed, onlySeat) {
     for (const k of ['from', 'to', 'kind', 'flag']) if (typeof stored[k] === 'string') stored[k] = stored[k].toLowerCase();
     if (s === 'arch1') stored = markShed(stored, seatOpenRows(s, false), queueOpts(s));
     if (placed.queued) stored.behind = true;
+    if (prior && prior.seat !== s) {
+      commitInboxMove(
+        { [s]: seatInbox[s] || [], [prior.seat]: seatInbox[prior.seat] || [] },
+        stored,
+        (seat, rows) => { seatInbox[seat] = rows; saveSeatInbox(seat); },
+      );
+      touched.add(s);
+      touched.add(prior.seat);
+      if (!placed.queued) fresh.push(stored);
+      continue;
+    }
     arr.push(stored); touched.add(s);
     if (!prior) added++;
     if (!placed.queued) fresh.push(stored);
@@ -2183,7 +2190,26 @@ function mergedHeader(now = Date.now()) {
     h.roster_roles = roster.roles;
   }
   if (h.fleet) h.fleet = stampSeatStatus(h.fleet, now, roster.names);
+  drainArch1Handoffs();
   return h;
+}
+function drainArch1Handoffs() {
+  const rows = seatInbox.arch1;
+  if (!Array.isArray(rows) || !rows.length) return;
+  const acked = ackedSet('arch1');
+  for (const line of rows.slice()) {
+    if (!handoffKind(line) || acked.has(line.id)) continue;
+    const copy = { ...line };
+    const placed = placeHandoff(copy);
+    if (!placed.seat || placed.seat === 'arch1') continue;
+    const stored = { ...copy, seat: placed.seat };
+    if (placed.queued) stored.behind = true;
+    commitInboxMove(
+      { [placed.seat]: seatInbox[placed.seat] || [], arch1: seatInbox.arch1 || [] },
+      stored,
+      (seat, next) => { seatInbox[seat] = next; saveSeatInbox(seat); },
+    );
+  }
 }
 function closedCardKeys() {
   const keys = new Set();

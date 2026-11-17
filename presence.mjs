@@ -35,9 +35,12 @@ export function seatPresence(raw = process.env.SEAT_PRESENCE) {
   return out;
 }
 
+const CLOCK_SKEW_MS = 5 * 60000;
+
 export function seatStatus(row, now = Date.now(), windowMs = 15 * 60000) {
   const last = tsOf(row && row.last_ct);
-  const fresh = last > 0 && now - last <= windowMs;
+  if (!last || last > now + CLOCK_SKEW_MS) return 'offline';
+  const fresh = now - last <= windowMs;
   const working = !!(row && (row.working || row.working_on));
   if (!fresh) return 'offline';
   return working ? 'busy' : 'online';

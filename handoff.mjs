@@ -285,7 +285,7 @@ function raciSeat(packet, letter) {
   return match ? seatWord(match[1]) : '';
 }
 
-// Primary is packet R, or the PR author seat when R is absent. Then the author, A, and next owner.
+// Primary is packet R, or the author when R is absent. Secondary is A. Tertiary is next owner.
 export function handoffChain(card) {
   const packet = card && card.packet && typeof card.packet === 'object' ? card.packet : {};
   const responsible = raciSeat(packet, 'R');
@@ -293,12 +293,30 @@ export function handoffChain(card) {
   const accountable = raciSeat(packet, 'A');
   const next = seatWord(packet['next owner'] || packet.next_owner);
   const chain = [];
-  for (const seat of [responsible || author, author, accountable, next]) {
+  for (const seat of [responsible || author, accountable, next]) {
     if (!seat || chain.includes(seat)) continue;
     chain.push(seat);
     if (chain.length === 3) break;
   }
   return chain;
+}
+
+// The new seat is written before the old seat drops the line.
+export function commitInboxMove(books, stored, write) {
+  const dest = stored && stored.seat;
+  if (!dest || !stored.id) return books;
+  const destRows = [...(books[dest] || []).filter(row => row && row.id !== stored.id), stored];
+  write(dest, destRows);
+  const next = { ...books, [dest]: destRows };
+  for (const seat of Object.keys(books)) {
+    if (seat === dest) continue;
+    const rows = books[seat] || [];
+    if (!rows.some(row => row && row.id === stored.id)) continue;
+    const kept = rows.filter(row => row && row.id !== stored.id);
+    write(seat, kept);
+    next[seat] = kept;
+  }
+  return next;
 }
 
 // Skip offline. A busy seat keeps the line and queues. No seat name is filled in here.

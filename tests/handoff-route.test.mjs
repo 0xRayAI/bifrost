@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { handoffChain, routeHandoff } from '../handoff.mjs';
+import { commitInboxMove, handoffChain, routeHandoff } from '../handoff.mjs';
 import { seatStatus } from '../presence.mjs';
 
 const APP = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,12 +19,33 @@ test('seat status is online, busy, or offline from the heartbeat', () => {
   assert.equal(seatStatus({ last_ct: new Date(now).toISOString(), working: true }, now, 60000), 'busy');
   assert.equal(seatStatus({ last_ct: new Date(now - 120000).toISOString(), working: true }, now, 60000), 'offline');
   assert.equal(seatStatus({}, now, 60000), 'offline');
+  assert.equal(seatStatus({ last_ct: new Date(now + 60000).toISOString() }, now, 60000), 'online');
+  assert.equal(seatStatus({ last_ct: new Date(now + 6 * 60000).toISOString() }, now, 60000), 'offline');
 });
 
-test('the chain is packet R, then the author, then A', () => {
-  const card = { owner: 'forge', packet: { raci: 'R=mill A=forge', 'next owner': 'critic' } };
-  assert.deepEqual(handoffChain(card), ['mill', 'forge', 'critic']);
+test('primary is R or the author, then A, then next', () => {
+  const card = { owner: 'arch1', packet: { raci: 'R=mill A=forge', 'next owner': 'x' } };
+  assert.deepEqual(handoffChain(card), ['mill', 'forge', 'x']);
+  assert.equal(handoffChain(card).includes('arch1'), false);
   assert.deepEqual(handoffChain({ owner: 'forge', packet: {} }), ['forge']);
+});
+
+test('a duplicate move writes the new seat before it drops the old one', () => {
+  const stored = { id: 'h1', seat: 'forge' };
+  const books = { arch1: [{ id: 'h1', seat: 'arch1' }], forge: [] };
+  const crash = [];
+  assert.throws(() => commitInboxMove(books, stored, (seat, rows) => {
+    crash.push({ seat, rows });
+    if (crash.length === 1) throw new Error('crash');
+  }));
+  assert.equal(crash.length, 1);
+  assert.equal(crash[0].seat, 'forge');
+  assert.equal(crash[0].rows.some((row) => row.id === 'h1'), true);
+  const order = [];
+  const next = commitInboxMove(books, stored, (seat) => { order.push(seat); });
+  assert.deepEqual(order, ['forge', 'arch1']);
+  assert.equal(next.forge.some((row) => row.id === 'h1'), true);
+  assert.equal(next.arch1.some((row) => row.id === 'h1'), false);
 });
 
 test('an offline primary yields to the next seat, and a busy primary stays queued', () => {
