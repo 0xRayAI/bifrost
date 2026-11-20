@@ -145,3 +145,15 @@ test('a spinner is only the card in working_on, and a 7-day seat is dormant', ()
   assert.match(html, /statusId\(c\.state\) === 'parked' \|\| statusId\(c\.state\) === 'held' \|\| statusId\(c\.stage\) === 'done'\) return false/);
   assert.match(html, /L\.rosterKept\) rosterRows = L\.rosterKept\(rosterRows, r\.feed\)/);
 });
+
+test('a feed tick does not reload, and the refresh control is the only reload', () => {
+  assert.match(html, /id="shellBanner" class="shell-banner" hidden/);
+  assert.match(html, /id="shellRefresh">New board version — Refresh</);
+  const pollAt = html.indexOf('function poll()');
+  const shownAt = html.indexOf('function onShown()');
+  assert.ok(pollAt > 0 && shownAt > pollAt);
+  assert.equal(html.slice(pollAt, shownAt).includes('location.reload'), false);
+  assert.equal(html.split('location.reload').length, 2);
+  assert.match(html, /shellBtn\.addEventListener\('click', function \(\) \{ location\.reload\(\); \}\)/);
+  assert.match(html, /applyShell\(r && r\.shell\)/);
+});

@@ -395,6 +395,9 @@ main > header {
 }
 .status b[title] { cursor: help; }
 header h1 span { color: var(--dim); font-size: 13px; font-weight: 400; letter-spacing: 0; margin-left: 8px; }
+.shell-banner { margin: 8px 0 0; }
+.shell-banner[hidden] { display: none; }
+#shellRefresh { font: inherit; font-size: 13px; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 6px; min-height: 44px; padding: 8px 12px; cursor: pointer; }
 .status { color: var(--dim); font-size: 13px; margin: 4px 0 0; }
 .status b { color: var(--text); font-weight: 600; }
 .status .err { color: var(--danger); }
@@ -627,6 +630,7 @@ footer a { color: var(--foot); }
     </div>
     <p class="status" id="status">Loading…</p>
     <p class="fresh" id="fresh"><span class="fresh-dot"></span><span id="freshText">Loading…</span></p>
+    <p id="shellBanner" class="shell-banner" hidden><button type="button" id="shellRefresh">New board version — Refresh</button></p>
   </header>
 
   <div class="fold" data-fold="stats" id="statsFold">
@@ -2340,6 +2344,14 @@ footer a { color: var(--foot); }
   })();
   loadHistoryDays();
   loadCardHist();
+  var shellBtn = $('shellRefresh');
+  if (shellBtn) shellBtn.addEventListener('click', function () { location.reload(); });
+  function applyShell(shell) {
+    var next = L.shellNotice(mem.shell || '', shell || '');
+    mem.shell = next.seen;
+    var bar = $('shellBanner');
+    if (bar && next.show) bar.hidden = false;
+  }
   var first = true;
   // A hidden tab skips polls. Coming back clears etag/cursor once so the next poll is not a silent 304,
   // and drops the stamp/key gates so ages and the health strip redraw even when the body is unchanged.
@@ -2373,6 +2385,7 @@ footer a { color: var(--foot); }
     if (show) mem.forceShow = 0;
     L.fetchFeed(window.fetch.bind(window), Date.now(), mem).then(function (r) {
       source = r.source; fetchError = '';
+      applyShell(r && r.shell);
       if (show) {
         mem.showStamp = wb.stamp || '';
         wb.stamp = '';

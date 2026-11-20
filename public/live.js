@@ -459,8 +459,24 @@
     return out.length ? out : null;
   }
 
+  function shellOf(res) {
+    if (!res || !res.headers || !res.headers.get) return '';
+    return res.headers.get('X-Bifrost-Shell') || '';
+  }
+
+  /* First sight records the shell this tab loaded. The same hash stays quiet.
+     A later hash asks for a refresh and does not replace the remembered hash. */
+  function shellNotice(seen, next) {
+    var cur = String(seen || '');
+    var got = String(next || '');
+    if (!got) return { seen: cur, show: false };
+    if (!cur) return { seen: got, show: false };
+    if (cur === got) return { seen: cur, show: false };
+    return { seen: cur, show: true };
+  }
+
   /* One poll. mem carries { etag, apiBlockedUntil } between polls. Resolves to
-     { source, feed } (feed null on a 304) or rejects when every source fails. */
+     { source, feed, shell } (feed null on a 304) or rejects when every source fails. */
   function fetchFeed(fetchFn, nowMs, mem) {
     var api = SOURCES[0];
     function fallback(i) {
@@ -468,14 +484,14 @@
       var src = SOURCES[i];
       return fetchFn(feedUrl(src.url, nowMs), { cache: 'no-store' }).then(function (res) {
         if (!res.ok) throw new Error(src.name + ' HTTP ' + res.status);
-        return res.json().then(function (feed) { return { source: src.name, feed: feed }; });
+        return res.json().then(function (feed) { return { source: src.name, feed: feed, shell: shellOf(res) }; });
       }).catch(function () { return fallback(i + 1); });
     }
     if (nowMs < (mem.apiBlockedUntil || 0)) return fallback(1);
     var headers = { Accept: 'application/vnd.github.raw' };
     if (mem.etag) headers['If-None-Match'] = mem.etag;
     return fetchFn(api.url, { cache: 'no-store', headers: headers }).then(function (res) {
-      if (res.status === 304) return { source: api.name, feed: null };
+      if (res.status === 304) return { source: api.name, feed: null, shell: shellOf(res) };
       if (res.status === 403 || res.status === 429) {
         var reset = Number(res.headers.get('X-RateLimit-Reset')) * 1000;
         var retry = Number(res.headers.get('Retry-After')) * 1000;
@@ -485,7 +501,7 @@
       if (!res.ok) return fallback(1);
       return res.json().then(function (feed) {
         mem.etag = res.headers.get('ETag') || null;
-        return { source: api.name, feed: feed };
+        return { source: api.name, feed: feed, shell: shellOf(res) };
       });
     }, function () { return fallback(1); });
   }
@@ -496,7 +512,7 @@
     resolveNodes: resolveNodes, eventColor: eventColor, cleanLabel: cleanLabel, promptView: promptView, activityLines: activityLines, whoTag: whoTag,
     headline: headline, parseT: parseT, mergeEvents: mergeEvents, countUpTo: countUpTo,
     eventsUpTo: eventsUpTo, pingsAt: pingsAt, hotNodes: hotNodes, applyFeed: applyFeed,
-    bounds: bounds, fmtCt: fmtCt, ago: ago, feedUrl: feedUrl, fetchFeed: fetchFeed, rosterEntries: rosterEntries,
+    bounds: bounds, fmtCt: fmtCt, ago: ago, feedUrl: feedUrl, fetchFeed: fetchFeed, shellNotice: shellNotice, rosterEntries: rosterEntries,
     own: own, botImage: botImage, badgeLetter: badgeLetter, bob: bob, pulse: pulse, entry: entry,
     ENTRY_MS: ENTRY_MS, PULSE_MS: PULSE_MS, MARK: MARK, markCells: markCells,
     isPlaying: isPlaying, sliderAction: sliderAction, edgeTraffic: edgeTraffic, orbitStep: orbitStep,
