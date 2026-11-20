@@ -988,10 +988,12 @@ function ackLines(seat, what, review) {
   for (const id of ids) {
     if (have.has(id)) continue;
     const line = lineOf(id);
-    if (line && isMergeHandoff(line) && !validMergeReview(review, line)) { blocked = true; continue; }
+    // A merged pull has no review left to collect. Store the pull URL. An open pull still needs a review link.
+    const settledMerge = line && isMergeHandoff(line) && itemClosed(line.repo, line.number);
+    if (line && isMergeHandoff(line) && !validMergeReview(review, line) && !settledMerge) { blocked = true; continue; }
     have.add(id); n++;
     const row = { seat, line: id, t_ct: ctStamp(Date.now()) };
-    if (line && isMergeHandoff(line)) row.review = review;
+    if (line && isMergeHandoff(line)) row.review = validMergeReview(review, line) ? review : String(line.url || '');
     appendArchive('acks', row);
     if (line) clearStallFired(stallFired, line);
   }
@@ -1104,12 +1106,39 @@ function lineDone(seat, l) {
   if (seat === REVIEW && c.reviewer && c.reviewer.at_head && Number(c.reviewer.t) >= lt) return true;   // verdict at head = Reviewer's step done
   return false;
 }
+// Latest review on a pull, same walk as closedItems. A short sha matches by prefix either way.
+let reviewSeq = -1, reviewMap = new Map();
+function reviewHeads() {
+  if (reviewSeq === seq) return reviewMap;
+  const m = new Map();
+  for (const { e } of evs.values()) {
+    if (!e || e.number == null) continue;
+    const kind = String(e.kind || '').toLowerCase();
+    if (kind !== 'review' && kind !== 'critic_pass' && kind !== 'critic_fail') continue;
+    const k = `${String(e.repo || '').toLowerCase()}#${Number(e.number)}`;
+    const t = Date.parse(e.t_ct) || 0;
+    const prev = m.get(k);
+    if (!prev || t >= prev.t) m.set(k, { t, sha: String(e.sha || '') });
+  }
+  reviewSeq = seq; reviewMap = m; return m;
+}
+function aheadOfReview(l) {
+  const sha = String(l && l.sha || '').trim().toLowerCase();
+  if (sha.length < 7) return false;
+  const hit = reviewHeads().get(`${String(l.repo || '').toLowerCase()}#${Number(l.number)}`);
+  if (!hit) return String(l.kind || '').toLowerCase() === 'ci_pass';
+  const reviewed = String(hit.sha || '').toLowerCase();
+  if (reviewed.length >= 7 && (sha.startsWith(reviewed) || reviewed.startsWith(sha))) return false;
+  return (Date.parse(l.t_ct) || 0) > hit.t;
+}
 // A settled line still shows on a plain read. --ack stale is the receipt: a close or merge event, or a card that is closed or done.
 // A missing card is not settled. The board drops cards, and a handoff can arrive before the card does.
+// While the pull is open, a sha newer than the latest review is not settled. A ci_pass with no review is not settled.
 function settledLine(l) {
   const number = Number(l && l.number);
   if (!l || !l.repo || !Number.isInteger(number) || number < 1) return false;
   if (itemClosed(l.repo, number)) return true;
+  if (aheadOfReview(l)) return false;
   const c = lineCard(l);
   if (!c) return false;
   return c.state === 'closed' || c.stage === 'done';
@@ -4421,7 +4450,7 @@ async function handle(req, res) {
     return json(req, res, 200, { ok: true, started: true, clock: run });
   }
   const ackM = /^\/inbox\/([a-z0-9-]{2,16})\/ack$/.exec(p);
-  if (ackM) {   // POST /inbox/<seat>/ack {"id"} | {"upto"} | {"stale": true} | {"all": true}: that seat's key only. stale acks up to 1000 open lines with a close or merge event, or a closed or done card. The same cap is on GET ?stale=1.
+  if (ackM) {   // POST /inbox/<seat>/ack {"id"} | {"upto"} | {"stale": true} | {"all": true}: that seat's key only. stale acks up to 1000 open lines with a close or merge event, or a closed or done card. A newer head than the latest review stays. The same cap is on GET ?stale=1.
     if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
     let who; try { who = await seatOf(req); } catch { return json(req, res, 503, { error: 'could not verify token, retry' }, { 'Retry-After': '30' }); }
     if (!who) { req.resume(); return json(req, res, 401, { error: 'unauthorized' }); }
