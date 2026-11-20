@@ -33,6 +33,7 @@ import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
 import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview, handoffKind, routeHandoff, commitInboxMove } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
+import { shellVersion, SHELL_HEADER } from './shell-version.mjs';
 import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundary, wakeAllowed } from './fleet-mode.mjs';
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck, idsToAckOnClose } from './ci-clear.mjs';
@@ -133,6 +134,16 @@ if (fs.existsSync(AV)) for (const f of fs.readdirSync(AV)) {
   if (/^[a-z0-9._-]+\.png$/i.test(f)) STATIC.set('/avatars/' + f, { type: 'image/png', body: fs.readFileSync(path.join(AV, f)) });
 }
 if (STATIC.has('/index.html')) STATIC.set('/', STATIC.get('/index.html'));
+function shellBody(name) {
+  const hit = STATIC.get('/' + name);
+  return hit ? hit.body : '';
+}
+const SHELL_VERSION = shellVersion({
+  'index.html': shellBody('index.html'),
+  'live.js': shellBody('live.js'),
+  'live-config.js': shellBody('live-config.js'),
+  'site-config.js': shellBody('site-config.js'),
+});
 
 // ---- feed (in memory, delta-capable, two sources merged by event id) ----
 // cursor = "<epoch>.<seq>": epoch is random per process (a cold start invalidates every cursor), seq bumps on
@@ -4038,7 +4049,7 @@ const BASE_HEADERS = {
 };
 function send(req, res, status, type, body, extra = {}) {
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(body);
-  res.writeHead(status, { ...BASE_HEADERS, 'Content-Type': type, 'Content-Length': buf.length, ...extra });
+  res.writeHead(status, { ...BASE_HEADERS, [SHELL_HEADER]: SHELL_VERSION, 'Content-Type': type, 'Content-Length': buf.length, ...extra });
   res.end(req.method === 'HEAD' ? undefined : buf);
 }
 const json = (req, res, status, obj, extra) => send(req, res, status, 'application/json; charset=utf-8', JSON.stringify(obj), extra);
@@ -4114,6 +4125,9 @@ async function handle(req, res) {
   if (p === '/healthz' && (m === 'GET' || m === 'HEAD')) {
     const body = healthBody();
     return send(req, res, body.ok ? 200 : 503, 'application/json; charset=utf-8', JSON.stringify(body));
+  }
+  if (p === '/shell-version' && (m === 'GET' || m === 'HEAD')) {
+    return send(req, res, 200, 'text/plain; charset=utf-8', SHELL_VERSION + '\n');
   }
   if (p === '/archive' && m === 'GET') {
     const key = String(process.env.ARCHIVE_KEY || '');
