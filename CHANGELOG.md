@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `/healthz` `wakes` reports `disabled` when the last attempt was a paused routine (HTTP 400, automation disabled), and `stale` when a fail is older than 6 hours, instead of leaving a sticky `fail`. #105
 - A later line nudge updates the existing inbox row in place (same id, bumped level and time). It does not append a second line. Once the fired set holds that line's key, L2 and L3 of the ladder do not wake; that is intended. The key is dropped when the line is acked or the card closes, so later stale work on the same card can fire once more.
 - After the #83 wake filter, two holes still rang seats. A later line nudge copied a board-only GitHub line (a new-head heads-up, a push, a deploy) and prefixed `nudge L1:` on the reason, which the filter treated as an act-now signal. The stall clock also minted a new `clock:<started_at>` id on every run, so one stale line (a #1082 breaker, for example) could wake the seat over and over, and the title counted those clock lines as open work. A stall now fires at most once per card or line id and the title count matches the unacked work inbox. A `needs_human` line to a seat wakes once per card; a line addressed to a human does not wake a bot. Part of 0xRayAI/xray#942.
 
