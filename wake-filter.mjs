@@ -3,6 +3,8 @@
 // fleet-roster.json "wake_filter" is the same JSON when the env var is unset.
 // A seat override of "all" keeps the old wake. "actionable" forces the filter.
 
+import { lineAlreadyFired, rememberStallFired } from './governor.mjs';
+
 const HOUR_MS = 60 * 60 * 1000;
 const REVIEW = new Set(['review', 'critic_pass', 'critic_fail', 'verdict']);
 const DIRECT = new Set(['dispatch', 'packet', 'handoff', 'start_after']);
@@ -619,8 +621,15 @@ export function allowWake(config, seat, line, ctx) {
   const now = ctx.now;
   if (stationLine(line)) return stationOpen(state, who, now) ? { allow: true } : { allow: false, reason: 'filter' };
   const kind = kindOf(line);
-  // needs_human (breaker, Blaze ask) and a hard STOP must ring the seat. The #83 filter skipped needs_human, so the line sat unacked and the stall clock kept firing.
-  if (kind === 'needs_human') return { allow: true };
+  // A needs_human line to a seat wakes once per card. A line addressed to a human does not wake a bot.
+  // The shared fired set is cleared when that line is acked or the card closes, so later work can ring again.
+  if (kind === 'needs_human') {
+    if (String(line && line.to || '').trim().toLowerCase() === 'human') return { allow: false, reason: 'filter' };
+    const fired = ctx && (ctx.fired instanceof Set ? ctx.fired : ctx.state && ctx.state.stallFired);
+    if (fired instanceof Set && lineAlreadyFired(line, fired)) return { allow: false, reason: 'filter' };
+    if (fired instanceof Set) rememberStallFired(fired, line);
+    return { allow: true };
+  }
   if (kind === 'stop' || kind === 'hard_stop') return { allow: true };
   // A real ladder or stall line (type/kind nudge, timed_run, clock) is the act-now signal.
   // A GitHub line that later gets a "nudge L1:" reason prefix is not: that bypass is how pr_heads / pr_update re-woke seats after #83.

@@ -2,6 +2,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, recordFlush, viewLine, wakeConfig } from '../wake-gate.mjs';
 import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen, assignCloudRaci } from '../wake-filter.mjs';
+import { clearStallFired } from '../governor.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -31,11 +32,31 @@ test('a mention or an owner prompt wakes, and a bare comment does not', () => {
   assert.equal(allowWake(on, 'forge', line({ type: 'issue_comment', title: 'hello' }), ctx()).allow, false);
   assert.equal(allowWake(on, 'forge', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, true);
-  assert.equal(allowWake(on, 'blinky', line({ type: 'needs_human', kind: 'needs_human', to: 'human' }), ctx()).allow, true);
+  assert.equal(allowWake(on, 'blinky', line({ type: 'needs_human', kind: 'needs_human', to: 'human' }), ctx()).allow, false);
   assert.equal(allowWake(on, 'blinky', line({ type: 'stop', kind: 'stop' }), ctx()).allow, true);
   for (const type of ['pr_update', 'pr_open', 'issue_open', 'deploy', 'cloud_finished', 'cloud_reply']) {
     assert.equal(allowWake(on, 'forge', line({ type }), ctx()).allow, false, type);
   }
+});
+
+test('a needs_human line addressed to a human does not wake a bot seat', () => {
+  const fired = new Set();
+  const human = line({ type: 'needs_human', kind: 'needs_human', to: 'human', repo: '0xRayAI/xray', number: 1082, id: 'breaker:0xRayAI/xray#1082:1' });
+  for (const seat of ['blinky', 'forge', 'critic']) {
+    assert.equal(allowWake(on, seat, human, ctx({ fired })).allow, false, seat);
+  }
+  assert.equal(fired.size, 0);
+});
+
+test('a needs_human line wakes once per card, even when the breaker id rolls the hour', () => {
+  const fired = new Set();
+  const first = line({ id: 'breaker:0xRayAI/xray#1082:100', type: 'needs_human', kind: 'needs_human', repo: '0xRayAI/xray', number: 1082 });
+  const later = line({ id: 'breaker:0xRayAI/xray#1082:101', type: 'needs_human', kind: 'needs_human', repo: '0xRayAI/xray', number: 1082 });
+  assert.equal(allowWake(on, 'blinky', first, ctx({ fired })).allow, true);
+  assert.equal(allowWake(on, 'blinky', later, ctx({ fired })).allow, false);
+  clearStallFired(fired, first);
+  assert.equal(allowWake(on, 'blinky', later, ctx({ fired })).allow, true);
+  assert.equal(allowWake(on, 'blinky', first, ctx({ fired })).allow, false);
 });
 
 test('a review or a current-head ci_fail wakes only the owner', () => {

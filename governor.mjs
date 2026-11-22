@@ -187,9 +187,22 @@ export function stallWorkKeys(lines) {
   return keys;
 }
 
-function lineAlreadyFired(line, firedSet) {
+export function lineAlreadyFired(line, firedSet) {
   const keys = stallLineKeys(line);
   return !!keys.length && keys.some(key => firedSet.has(key));
+}
+
+/** Drop this line's id and card key so a later stale line on the same card can fire again. */
+export function clearStallFired(fired, line) {
+  const set = fired instanceof Set ? fired : loadStallFired(fired);
+  for (const key of stallLineKeys(line)) set.delete(key);
+  return set;
+}
+
+export function rememberStallFired(fired, line) {
+  const set = fired instanceof Set ? fired : loadStallFired(fired);
+  for (const key of stallLineKeys(line)) set.add(key);
+  return set;
 }
 
 /** Update the existing inbox row in place. Same id, bumped level and time. Never appends. */

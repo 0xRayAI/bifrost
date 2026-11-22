@@ -18,7 +18,7 @@ import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
-import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge } from './governor.mjs';
+import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
@@ -626,6 +626,7 @@ function offerLines(lines) {
       now, state: wakeState, owner: ownerOfLine(w.line), head: headOfLine(w.line),
       headAt: headUpdatedAt(card),
       closed: itemClosed(w.line && w.line.repo, w.line && w.line.number),
+      fired: stallFired,
     });
     if (!kept.allow) { recordSkip(seat, w.line, 'filter'); continue; }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
@@ -643,6 +644,7 @@ function offerLines(lines) {
     enqueuePending(seat, d.line);
   }
   persistWakeBreaker();
+  persistStallFired();
 }
 function noteWake(seat, line) {
   try {
@@ -991,7 +993,9 @@ function ackLines(seat, what, review) {
     const row = { seat, line: id, t_ct: ctStamp(Date.now()) };
     if (line && isMergeHandoff(line)) row.review = review;
     appendArchive('acks', row);
+    if (line) clearStallFired(stallFired, line);
   }
+  if (n) persistStallFired();
   const live = new Set(arr.map(l => l.id)); inboxAcks[seat] = [...have].filter(id => live.has(id)).slice(-6000);
   bfWrite('acks.json', JSON.stringify(inboxAcks));
   if (single && blocked && n === 0) return -2;
@@ -2492,7 +2496,20 @@ function tickFleetSchedule(now) {
   saveFleetMode();
   seq++; fullDirty = true;
 }
+function releaseClosedStallKeys() {
+  let changed = false;
+  for (const seat of SEAT_IDS) {
+    for (const line of seatInbox[seat] || []) {
+      if (!line || !(itemClosed(line.repo, line.number) || settledLine(line))) continue;
+      const before = stallFired.size;
+      clearStallFired(stallFired, line);
+      if (stallFired.size !== before) changed = true;
+    }
+  }
+  if (changed) persistStallFired();
+}
 function governorRun(now = Date.now()) {
+  releaseClosedStallKeys();
   if (sweepShed(now)) { seq++; fullDirty = true; }
   tickFleetSchedule(now);
   if (flushHeld()) { seq++; fullDirty = true; }

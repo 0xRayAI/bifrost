@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, stallLineKeys, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge } from '../governor.mjs';
+import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, stallLineKeys, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from '../governor.mjs';
 
 const tripMs = 30 * 60000;
 
@@ -153,4 +153,19 @@ test('several line nudges update one inbox row and the open count stays 1', () =
   assert.equal(inbox[0].reason, 'nudge L3: handoff ready');
   assert.equal(inbox[0].t_ct, '2026-11-22T08:50:00-06:00');
   assert.deepEqual(stallLineKeys(inbox[0]), ['handoff:xray#1199:ready:abc', '0xrayai/xray#1199']);
+});
+
+test('after an ack, a new stale line on the same card gets one more stall wake', () => {
+  const deadlines = { mill: 't' };
+  const firstLine = { id: 'handoff:xray#1199:ready:aaa', type: 'packet', kind: 'ready', repo: '0xRayAI/xray', number: 1199 };
+  const first = planStallWakes({ reason: 'stall', deadlines, openBySeat: { mill: [firstLine] }, fired: new Set() });
+  assert.equal(first.wakes.length, 1);
+  assert.equal(first.wakes[0].openCount, 1);
+  const held = clearStallFired(first.fired, firstLine);
+  const nextLine = { id: 'handoff:xray#1199:ready:bbb', type: 'packet', kind: 'ready', repo: '0xRayAI/xray', number: 1199 };
+  const second = planStallWakes({ reason: 'stall', deadlines, openBySeat: { mill: [nextLine] }, fired: held });
+  assert.equal(second.wakes.length, 1);
+  assert.equal(second.wakes[0].seat, 'mill');
+  const third = planStallWakes({ reason: 'stall', deadlines, openBySeat: { mill: [nextLine] }, fired: second.fired });
+  assert.deepEqual(third.wakes, []);
 });
