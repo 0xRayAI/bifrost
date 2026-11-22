@@ -18,7 +18,7 @@ import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
-import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired } from './governor.mjs';
+import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
@@ -1233,12 +1233,17 @@ function nudgeLines(now) {
     const lvl = nextLineNudge(lineNudgeLevel.get(base), mine.length);
     if (!lvl || (last && now - last.t < NUDGE_LINE_MS)) continue;
     if (!wakeAllowed(fleetMode.mode, lineCard(l) || l)) continue;
-    nudges.push({ id: `${base}:L${lvl}`, kind: 'line', line_key: base, t: now, t_ct: ctStamp(now), card: '', repo: l.repo || '',
-      number: Number.isInteger(l.number) ? l.number : 0, title: String(l.title || '').slice(0, 120), url: String(l.url || '').slice(0, 300),
-      stage: '', level: lvl, seat, via: 'unacked line', line: String(l.id).slice(0, 300), since: new Date(t).toISOString() });
+    const stamped = ctStamp(now);
+    const applied = applyLineNudge(seatInbox[seat], l.id, { level: lvl, t_ct: stamped, woken: stallFired });
+    if (!applied.line) continue;
+    saveSeatInbox(seat);
+    persistStallFired();
+    nudges.push({ id: `${base}:L${lvl}`, kind: 'line', line_key: base, t: now, t_ct: stamped, card: '', repo: applied.line.repo || '',
+      number: Number.isInteger(applied.line.number) ? applied.line.number : 0, title: String(applied.line.title || '').slice(0, 120), url: String(applied.line.url || '').slice(0, 300),
+      stage: '', level: lvl, seat, via: 'unacked line', line: String(applied.line.id).slice(0, 300), since: new Date(t).toISOString() });
     lineNudgeLevel.set(base, lvl);
     persistLineNudgeLevels();
-    noteWake(seat, { ...l, reason: (`nudge L${lvl}: ` + (l.reason || '')).slice(0, 300) });
+    if (applied.wake) noteWake(seat, applied.line);
     changed = true;
   }
   for (const n of nudges) if ((n.kind === 'line' || (n.kind === 'reassign' && n.line_key)) && !n.closed_at && !open.has(n.line_key)) { n.closed_at = new Date(now).toISOString(); changed = true; }

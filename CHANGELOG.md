@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A later line nudge updates the existing inbox row in place (same id, bumped level and time). It does not append a second line, and it does not fire another wake for that line id.
 - After the #83 wake filter, two holes still rang seats. A later line nudge copied a board-only GitHub line (a new-head heads-up, a push, a deploy) and prefixed `nudge L1:` on the reason, which the filter treated as an act-now signal. The stall clock also minted a new `clock:<started_at>` id on every run, so one stale line (a #1082 breaker, for example) could wake the seat over and over, and the title counted those clock lines as open work. A stall now fires at most once per card or line id and the title count matches the unacked work inbox. `needs_human` and a STOP still wake. Part of 0xRayAI/xray#942.
 
 

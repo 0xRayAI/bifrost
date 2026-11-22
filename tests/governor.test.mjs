@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, planStallWakes, loadStallFired, dumpStallFired } from '../governor.mjs';
+import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, stallLineKeys, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge } from '../governor.mjs';
 
 const tripMs = 30 * 60000;
 
@@ -106,8 +106,9 @@ test('a stall wake fires once per stale line id, even when the clock id changes'
   const second = planStallWakes({ reason: 'stall', deadlines, openBySeat: later, fired: first.fired });
   assert.deepEqual(second.wakes, []);
   const dumped = dumpStallFired(second.fired);
-  assert.deepEqual(dumped, ['0xrayai/xray#1082']);
-  assert.deepEqual([...loadStallFired(dumped)], ['0xrayai/xray#1082']);
+  assert.ok(dumped.includes('0xrayai/xray#1082'));
+  assert.ok(dumped.includes('breaker:0xRayAI/xray#1082:100'));
+  assert.deepEqual([...loadStallFired(dumped)].sort(), dumped.slice().sort());
 });
 
 test('an empty-board clock still wakes, and a new work line can still fire after a prior stall', () => {
@@ -123,4 +124,33 @@ test('an empty-board clock still wakes, and a new work line can still fire after
   });
   assert.equal(next.wakes.length, 1);
   assert.equal(next.wakes[0].seat, 'mill');
+});
+
+test('several line nudges update one inbox row and the open count stays 1', () => {
+  const inbox = [{
+    id: 'handoff:xray#1199:ready:abc',
+    type: 'packet',
+    kind: 'ready',
+    repo: '0xRayAI/xray',
+    number: 1199,
+    reason: 'handoff ready',
+    t_ct: '2026-11-22T08:00:00-06:00',
+  }];
+  const woken = new Set();
+  const first = applyLineNudge(inbox, inbox[0].id, { level: 1, t_ct: '2026-11-22T08:20:00-06:00', woken });
+  assert.equal(first.wake, true);
+  assert.equal(first.count, 1);
+  assert.equal(inbox.length, 1);
+  const second = applyLineNudge(inbox, inbox[0].id, { level: 2, t_ct: '2026-11-22T08:35:00-06:00', woken });
+  const third = applyLineNudge(inbox, inbox[0].id, { level: 3, t_ct: '2026-11-22T08:50:00-06:00', woken });
+  assert.equal(second.wake, false);
+  assert.equal(third.wake, false);
+  assert.equal(inbox.length, 1);
+  assert.equal(third.count, 1);
+  assert.equal(unackedWorkCount(inbox), 1);
+  assert.equal(inbox[0].id, 'handoff:xray#1199:ready:abc');
+  assert.equal(inbox[0].nudge_level, 3);
+  assert.equal(inbox[0].reason, 'nudge L3: handoff ready');
+  assert.equal(inbox[0].t_ct, '2026-11-22T08:50:00-06:00');
+  assert.deepEqual(stallLineKeys(inbox[0]), ['handoff:xray#1199:ready:abc', '0xrayai/xray#1199']);
 });
