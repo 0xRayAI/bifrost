@@ -153,3 +153,47 @@ test('stale data_age stays informational while collector_age stays small; a full
     fs.rmSync(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   }
 });
+
+test('a paused wake reports disabled, an old fail reports stale, and a bare http_400 stays fail', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-health-wake-'));
+  fs.mkdirSync(path.join(data, 'live'), { recursive: true });
+  const now = new Date();
+  const old = new Date(now.getTime() - 7 * 3600 * 1000);
+  const hooks = {};
+  for (const seat of ['forge', 'critic', 'blinky', 'herald', 'arch1', 'near', 'mill', 'nibbler']) {
+    hooks[seat] = { url: `http://127.0.0.1:9/${seat}` };
+  }
+  const rows = [
+    { seat: 'forge', id: 'w-forge', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'http_400_disabled', detail: 'Automation is disabled' },
+    { seat: 'critic', id: 'w-critic', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'http_500' },
+    { seat: 'blinky', id: 'w-blinky', t_ct: old.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'network' },
+    { seat: 'herald', id: 'w-herald', t_ct: now.toISOString(), ok: true, attempts: 1, outcome: 'delivered' },
+    { seat: 'arch1', id: 'w-arch1', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'http_400', detail: "Automation 'x' is disabled" },
+    { seat: 'near', id: 'w-near', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'http_400' },
+  ];
+  fs.writeFileSync(path.join(data, 'live', 'wakes.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+  const srv = start(data, {
+    SEAT_WEBHOOKS: JSON.stringify(hooks),
+    WAKE_KEY_FORGE: 'kf', WAKE_KEY_CRITIC: 'kc', WAKE_KEY_BLINKY: 'kb',
+    WAKE_KEY_HERALD: 'kh', WAKE_KEY_ARCH1: 'ka', WAKE_KEY_NEAR: 'kn',
+    WAKE_KEY_MILL: 'km',
+  });
+  try {
+    await srv.ready;
+    const body = await (await fetch(srv.base + '/healthz')).json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.wakes, {
+      forge: 'disabled',
+      critic: 'fail',
+      blinky: 'stale',
+      herald: 'ok',
+      arch1: 'disabled',
+      near: 'fail',
+      mill: 'idle',
+      nibbler: 'no_key',
+    });
+  } finally {
+    await stop(srv.child);
+    fs.rmSync(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  }
+});

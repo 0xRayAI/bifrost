@@ -811,7 +811,12 @@ async function flushWake(seat) {
   if (outcome === 'skipped') console.log(`wake: ${seat} skipped (noop)`);
   else {
     st.status = { ok: !!result.ok, outcome, attempts: result.attempts, at };
-    if (!result.ok) st.status.error = result.error || 'network';
+    if (!result.ok) {
+      st.status.error = result.error || 'network';
+      if (result.detail) st.status.detail = String(result.detail).slice(0, 160);
+      if (wakeIsDisabled(st.status) && !/disabled/i.test(String(st.status.error || '')))
+        st.status.error = (st.status.error + '_disabled').slice(0, 40);
+    }
     console.log(`wake: ${seat} ${result.ok ? 'ok' : 'fail'} attempts=${result.attempts}${result.ok ? '' : ' ' + st.status.error}${result.detail ? ' body=' + JSON.stringify(result.detail) : ''}`);
     if (result.ok) {
       recordFlush(wakeState, seat, batch, result, Date.now());
@@ -832,7 +837,7 @@ async function flushWake(seat) {
       repo: String(last.repo || '').slice(0, 200), number: Number.isInteger(last.number) ? last.number : 0,
       kind: String(last.type || last.kind || '').slice(0, 64),
       ...(typeof last.sha === 'string' && last.sha ? { sha: last.sha.slice(0, 80) } : {}),
-      ...(outcome === 'failed' ? { error: String(result.error || 'network').slice(0, 40) } : {}),
+      ...(outcome === 'failed' ? { error: String((st.status && st.status.error) || result.error || 'network').slice(0, 40), ...(st.status && st.status.detail ? { detail: String(st.status.detail).slice(0, 160) } : {}) } : {}),
     });
   } catch (e) { console.log('wake: append failed ' + ((e && e.code) || 'write')); }
   try { await ringCriticDoorbell(seat, batch); } catch { /* the inbox wake already finished */ }
@@ -3158,11 +3163,24 @@ function boardWord() {
   if (!bfCards.length) return 'empty';
   return 'live';
 }
-function wakeHealth() {   // seat -> ok | fail | no_key | idle (configured, nothing sent yet); never a url or key
+const WAKE_STALE_MS = 6 * 3600 * 1000;
+function wakeIsDisabled(st) {   // paused routine: HTTP 400 "Automation ... is disabled"; error is sliced to 40 chars when persisted
+  if (!st) return false;
+  return /disabled/i.test(`${st.error || ''} ${st.detail || ''}`);
+}
+function wakeHealth(now = Date.now()) {   // seat -> ok | fail | disabled | stale | no_key | idle (configured, nothing sent yet); never a url or key
   const out = {};
   for (const [seat, cfg] of Object.entries(SEAT_WEBHOOKS)) {
     const st = wakeQ.get(seat)?.status;
-    out[seat] = st ? (st.ok ? 'ok' : st.error === 'no_key' ? 'no_key' : 'fail') : (process.env[cfg.keyEnv] || process.env[cfg.seatKeyEnv] ? 'idle' : 'no_key');
+    if (!st) {
+      out[seat] = process.env[cfg.keyEnv] || process.env[cfg.seatKeyEnv] ? 'idle' : 'no_key';
+      continue;
+    }
+    if (st.ok) { out[seat] = 'ok'; continue; }
+    if (st.error === 'no_key') { out[seat] = 'no_key'; continue; }
+    if (wakeIsDisabled(st)) { out[seat] = 'disabled'; continue; }
+    const at = Date.parse(st.at || '');
+    out[seat] = Number.isFinite(at) && now - at > WAKE_STALE_MS ? 'stale' : 'fail';
   }
   return out;
 }
@@ -3785,6 +3803,7 @@ function loadPersistedWakes() {   // last non-skipped wake per seat survives a r
     st.status = { ok: !!row.ok, attempts: Number(row.attempts) || 0, at: typeof row.t_ct === 'string' ? row.t_ct : new Date().toISOString() };
     if (row.outcome === 'delivered' || row.outcome === 'failed') st.status.outcome = row.outcome;
     if (row.error) st.status.error = String(row.error).slice(0, 40);
+    if (row.detail) st.status.detail = String(row.detail).slice(0, 160);
     const t = Date.parse(row.t_ct || '');
     if (Number.isFinite(t)) st.lastSent = t;
     if (row.ok && (row.outcome == null || row.outcome === 'delivered') && typeof row.t_ct === 'string' && !wakeOkAt[seat]) wakeOkAt[seat] = row.t_ct;
