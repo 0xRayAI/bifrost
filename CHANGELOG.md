@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- After the #83 wake filter, two holes still rang seats. A later line nudge copied a board-only GitHub line (a new-head heads-up, a push, a deploy) and prefixed `nudge L1:` on the reason, which the filter treated as an act-now signal. The stall clock also minted a new `clock:<started_at>` id on every run, so one stale line (a #1082 breaker, for example) could wake the seat over and over, and the title counted those clock lines as open work. A stall now fires at most once per card or line id and the title count matches the unacked work inbox. `needs_human` and a STOP still wake. Part of 0xRayAI/xray#942.
+
+
 - A seat is not woken for a GitHub event whose actor is that seat's own App or bot login. The line is still stored, and other seats still wake. Packet R still rings the opener. xray#1060
 - The wake breaker (the comment count and the pause on a repo#n) is written to the live volume and reloaded on boot, so a redeploy does not clear it. xray#979
 

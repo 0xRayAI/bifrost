@@ -619,10 +619,13 @@ export function allowWake(config, seat, line, ctx) {
   const now = ctx.now;
   if (stationLine(line)) return stationOpen(state, who, now) ? { allow: true } : { allow: false, reason: 'filter' };
   const kind = kindOf(line);
-  // The ladder and the stall clock are already the act-now signal. The filter cuts the GitHub noise.
+  // needs_human (breaker, Blaze ask) and a hard STOP must ring the seat. The #83 filter skipped needs_human, so the line sat unacked and the stall clock kept firing.
+  if (kind === 'needs_human') return { allow: true };
+  if (kind === 'stop' || kind === 'hard_stop') return { allow: true };
+  // A real ladder or stall line (type/kind nudge, timed_run, clock) is the act-now signal.
+  // A GitHub line that later gets a "nudge L1:" reason prefix is not: that bypass is how pr_heads / pr_update re-woke seats after #83.
   if (kind === 'nudge' || kind === 'timed_run' || kind === 'clock' || String(line.type || '').toLowerCase() === 'nudge') return { allow: true };
   if (DIRECT.has(kind)) return { allow: true };
-  if (/^nudge L\d/i.test(String(line.reason || ''))) return { allow: true };
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
   if (REOPEN.has(kind) && ctx.owner === who) return { allow: true };

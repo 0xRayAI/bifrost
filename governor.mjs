@@ -137,3 +137,66 @@ export function createClock({ tripMs, perSeatMs, now = Date.now(), state = null 
     },
   };
 }
+
+/** Inbox noise the stall should not count as open work: clock lines and ladder nudges. */
+export function isClockNudge(line) {
+  const type = String(line && (line.type || line.kind) || '').toLowerCase();
+  if (type === 'nudge' || type === 'timed_run' || type === 'clock') return true;
+  const id = String(line && line.id || '');
+  return id.startsWith('nudge:') || id.startsWith('clock:');
+}
+
+/** Stable key for one stale work item. The same card stays one key even when a breaker id rolls the hour. */
+export function stallWorkKey(line) {
+  if (!line || isClockNudge(line)) return '';
+  const repo = String(line.repo || '').trim().toLowerCase();
+  const n = Number(line.number);
+  if (repo && Number.isInteger(n) && n > 0) return repo + '#' + n;
+  return String(line.id || '').trim();
+}
+
+export function unackedWorkCount(lines) {
+  return (Array.isArray(lines) ? lines : []).filter(line => !isClockNudge(line)).length;
+}
+
+export function stallWorkKeys(lines) {
+  const keys = [];
+  const seen = new Set();
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const key = stallWorkKey(line);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+export function loadStallFired(rows) {
+  return new Set((Array.isArray(rows) ? rows : []).map(x => String(x || '').trim()).filter(Boolean));
+}
+
+export function dumpStallFired(fired, cap = 2000) {
+  const ids = [...(fired instanceof Set ? fired : [])];
+  return ids.length > cap ? ids.slice(-cap) : ids;
+}
+
+/** Who the stall clock may still ring, and the unacked work count for the title. */
+export function planStallWakes({ reason, deadlines, openBySeat, fired, cap = 2000 }) {
+  const firedSet = fired instanceof Set ? fired : loadStallFired(fired);
+  const wakes = [];
+  const nextFired = new Set(firedSet);
+  for (const seat of Object.keys(deadlines || {})) {
+    const open = openBySeat && openBySeat[seat] ? openBySeat[seat] : [];
+    const openCount = unackedWorkCount(open);
+    if (reason === 'stall') {
+      const keys = stallWorkKeys(open);
+      const fresh = keys.filter(key => !firedSet.has(key));
+      if (!fresh.length) continue;
+      for (const key of fresh) nextFired.add(key);
+    }
+    wakes.push({ seat, openCount });
+  }
+  const kept = dumpStallFired(nextFired, cap);
+  return { wakes, fired: new Set(kept) };
+}
+

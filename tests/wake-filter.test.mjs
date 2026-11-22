@@ -29,9 +29,10 @@ test('a mention or an owner prompt wakes, and a bare comment does not', () => {
   assert.equal(allowWake(on, 'critic', line({ type: 'start_after', reason: 'start after 2020-01-01T08:00-06:00' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'prompt', kind: 'seat_prompt' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'issue_comment', title: 'hello' }), ctx()).allow, false);
-  assert.equal(allowWake(on, 'forge', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, false);
-  assert.equal(allowWake(on, 'critic', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, false);
-  assert.equal(allowWake(on, 'blinky', line({ type: 'needs_human', kind: 'needs_human', to: 'human' }), ctx()).allow, false);
+  assert.equal(allowWake(on, 'forge', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, true);
+  assert.equal(allowWake(on, 'critic', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, true);
+  assert.equal(allowWake(on, 'blinky', line({ type: 'needs_human', kind: 'needs_human', to: 'human' }), ctx()).allow, true);
+  assert.equal(allowWake(on, 'blinky', line({ type: 'stop', kind: 'stop' }), ctx()).allow, true);
   for (const type of ['pr_update', 'pr_open', 'issue_open', 'deploy', 'cloud_finished', 'cloud_reply']) {
     assert.equal(allowWake(on, 'forge', line({ type }), ctx()).allow, false, type);
   }
@@ -455,6 +456,15 @@ test('a ci_fail wakes only the owed seat on the current head', () => {
 test('a ladder nudge and the stall clock still wake', () => {
   assert.equal(allowWake(on, 'forge', line({ type: 'nudge', reason: 'nudge L1: stale' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'timed_run', id: 'clock:1:critic' }), ctx()).allow, true);
+});
+
+test('a nudge L1 prefix on a board-only GitHub line does not bypass the filter', () => {
+  for (const type of ['pr_update', 'pr_open', 'pr_commit', 'push', 'deploy', 'pr_review']) {
+    const got = allowWake(on, 'blinky', line({ type, kind: type, reason: 'nudge L1: heads-up: new PR or new head' }), ctx());
+    assert.equal(got.allow, false, type);
+  }
+  // An unacked heads-up stays on the board. The prefix must not turn it into a wake.
+  assert.equal(allowWake(on, 'blinky', line({ type: 'pr_update', reason: 'nudge L2: heads-up' }), ctx()).allow, false);
 });
 
 test('a second station nudge inside the hour is filtered', () => {

@@ -18,7 +18,7 @@ import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
-import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove } from './governor.mjs';
+import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
@@ -2388,6 +2388,22 @@ function readClockState() {
   return null;
 }
 const clock = createClock({ tripMs: TRIP_MS, perSeatMs: PER_SEAT_MS, state: readClockState() });
+function readStallFired() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'stall-fired.json'), 'utf8'));
+    return loadStallFired(saved);
+  } catch { /* first boot has no stall-fired file */ }
+  return new Set();
+}
+let stallFired = readStallFired();
+function persistStallFired() {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const file = path.join(STATE_DIR, 'stall-fired.json');
+    fs.writeFileSync(file + '.tmp', JSON.stringify(dumpStallFired(stallFired)));
+    fs.renameSync(file + '.tmp', file);
+  } catch (e) { console.log('clock: stall-fired save failed ' + ((e && e.code) || 'write')); }
+}
 const trip = tripwire();
 let governorChanges = 0;
 function loadMutedSeats() {
@@ -2416,15 +2432,9 @@ function recentPromptSeats(now = Date.now()) {
   }
   return out;
 }
-function isClockNudge(line) {
-  const type = String(line && (line.type || line.kind) || '');
-  if (type === 'nudge' || type === 'timed_run') return true;
-  const id = String(line && line.id || '');
-  return id.startsWith('nudge:') || id.startsWith('clock:');
-}
 function stallOpenSeats(now = Date.now()) {
   const counts = {};
-  for (const seat of SEAT_IDS) counts[seat] = openLines(seat).filter(line => !isClockNudge(line)).length;
+  for (const seat of SEAT_IDS) counts[seat] = unackedWorkCount(openLines(seat));
   return selectStallSeats(SEAT_IDS, loadMutedSeats(), counts, recentPromptSeats(now));
 }
 function nudgeCoversOpen() {
@@ -2445,15 +2455,23 @@ function clockPicture(now = Date.now()) {
   };
 }
 function wakeRun(run) {
-  for (const [seat, by] of Object.entries(run.deadlines)) {
-    const n = openLines(seat).length;
+  const openBySeat = {};
+  for (const seat of Object.keys(run.deadlines)) openBySeat[seat] = openLines(seat);
+  const planned = planStallWakes({ reason: run.reason, deadlines: run.deadlines, openBySeat, fired: stallFired });
+  stallFired = planned.fired;
+  persistStallFired();
+  for (const item of planned.wakes) {
+    const seat = item.seat;
+    const by = run.deadlines[seat];
+    const n = item.openCount;
     const planning = run.reason === 'plan' || (run.planSeat && seat === run.planSeat);
     const reason = run.reason === 'empty' ? `board empty, pull next work by ${by}`
       : planning ? `plan next wave: nothing carded, card the ranked backlog by ${by}`
       : `timed run (${run.reason}): move your open work or post your blocker in one line by ${by}`;
     noteWake(seat, { id: `clock:${run.started_at}:${seat}`, type: 'timed_run', title: wakeTitle(run, seat, n), reason });
   }
-  console.log(`clock: ${run.reason} run started, ${Object.keys(run.deadlines).length} seat(s), ends ${run.ends_at}`);
+  if (!planned.wakes.length) console.log(`clock: ${run.reason} run skipped, stale lines already fired`);
+  else console.log(`clock: ${run.reason} run started, ${planned.wakes.length} seat(s), ends ${run.ends_at}`);
 }
 function moveFp() { return fingerprint([...evs.values()].map(v => v.e).filter(stallMove), { acks: Object.values(inboxAcks).reduce((n, a) => n + (a ? a.length : 0), 0) }); }
 function flushHeld() {
