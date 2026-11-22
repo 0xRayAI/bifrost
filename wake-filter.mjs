@@ -3,6 +3,8 @@
 // fleet-roster.json "wake_filter" is the same JSON when the env var is unset.
 // A seat override of "all" keeps the old wake. "actionable" forces the filter.
 
+import { lineAlreadyFired, rememberStallFired } from './governor.mjs';
+
 const HOUR_MS = 60 * 60 * 1000;
 const REVIEW = new Set(['review', 'critic_pass', 'critic_fail', 'verdict']);
 const DIRECT = new Set(['dispatch', 'packet', 'handoff', 'start_after']);
@@ -619,10 +621,20 @@ export function allowWake(config, seat, line, ctx) {
   const now = ctx.now;
   if (stationLine(line)) return stationOpen(state, who, now) ? { allow: true } : { allow: false, reason: 'filter' };
   const kind = kindOf(line);
-  // The ladder and the stall clock are already the act-now signal. The filter cuts the GitHub noise.
+  // A needs_human line to a seat wakes once per card. A line addressed to a human does not wake a bot.
+  // The shared fired set is cleared when that line is acked or the card closes, so later work can ring again.
+  if (kind === 'needs_human') {
+    if (String(line && line.to || '').trim().toLowerCase() === 'human') return { allow: false, reason: 'filter' };
+    const fired = ctx && (ctx.fired instanceof Set ? ctx.fired : ctx.state && ctx.state.stallFired);
+    if (fired instanceof Set && lineAlreadyFired(line, fired)) return { allow: false, reason: 'filter' };
+    if (fired instanceof Set) rememberStallFired(fired, line);
+    return { allow: true };
+  }
+  if (kind === 'stop' || kind === 'hard_stop') return { allow: true };
+  // A real ladder or stall line (type/kind nudge, timed_run, clock) is the act-now signal.
+  // A GitHub line that later gets a "nudge L1:" reason prefix is not: that bypass is how pr_heads / pr_update re-woke seats after #83.
   if (kind === 'nudge' || kind === 'timed_run' || kind === 'clock' || String(line.type || '').toLowerCase() === 'nudge') return { allow: true };
   if (DIRECT.has(kind)) return { allow: true };
-  if (/^nudge L\d/i.test(String(line.reason || ''))) return { allow: true };
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
   if (REOPEN.has(kind) && ctx.owner === who) return { allow: true };

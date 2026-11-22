@@ -137,3 +137,118 @@ export function createClock({ tripMs, perSeatMs, now = Date.now(), state = null 
     },
   };
 }
+
+/** Inbox noise the stall should not count as open work: clock lines and ladder nudges. */
+export function isClockNudge(line) {
+  const type = String(line && (line.type || line.kind) || '').toLowerCase();
+  if (type === 'nudge' || type === 'timed_run' || type === 'clock') return true;
+  const id = String(line && line.id || '');
+  return id.startsWith('nudge:') || id.startsWith('clock:');
+}
+
+/** Stable key for one stale work item. The same card stays one key even when a breaker id rolls the hour. */
+export function stallWorkKey(line) {
+  if (!line || isClockNudge(line)) return '';
+  const repo = String(line.repo || '').trim().toLowerCase();
+  const n = Number(line.number);
+  if (repo && Number.isInteger(n) && n > 0) return repo + '#' + n;
+  return String(line.id || '').trim();
+}
+
+export function unackedWorkCount(lines) {
+  return (Array.isArray(lines) ? lines : []).filter(line => !isClockNudge(line)).length;
+}
+
+/** Line id and, when present, the card. A rolling breaker id and its card stay one stale item. */
+export function stallLineKeys(line) {
+  if (!line || isClockNudge(line)) return [];
+  const keys = [];
+  const id = String(line.id || '').trim();
+  if (id) keys.push(id);
+  const repo = String(line.repo || '').trim().toLowerCase();
+  const n = Number(line.number);
+  if (repo && Number.isInteger(n) && n > 0) {
+    const card = repo + '#' + n;
+    if (card !== id) keys.push(card);
+  }
+  return keys;
+}
+
+export function stallWorkKeys(lines) {
+  const keys = [];
+  const seen = new Set();
+  for (const line of Array.isArray(lines) ? lines : []) {
+    for (const key of stallLineKeys(line)) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
+export function lineAlreadyFired(line, firedSet) {
+  const keys = stallLineKeys(line);
+  return !!keys.length && keys.some(key => firedSet.has(key));
+}
+
+/** Drop this line's id and card key so a later stale line on the same card can fire again. */
+export function clearStallFired(fired, line) {
+  const set = fired instanceof Set ? fired : loadStallFired(fired);
+  for (const key of stallLineKeys(line)) set.delete(key);
+  return set;
+}
+
+export function rememberStallFired(fired, line) {
+  const set = fired instanceof Set ? fired : loadStallFired(fired);
+  for (const key of stallLineKeys(line)) set.add(key);
+  return set;
+}
+
+/** Update the existing inbox row in place. Same id, bumped level and time. Never appends. */
+export function applyLineNudge(inbox, lineId, { level, t_ct, woken } = {}) {
+  const rows = Array.isArray(inbox) ? inbox : [];
+  const id = String(lineId || '').trim();
+  const line = id ? rows.find(row => row && String(row.id) === id) : null;
+  if (!line) return { inbox: rows, line: null, wake: false, count: unackedWorkCount(rows) };
+  const baseReason = String(line.reason || '').replace(/^nudge L\d:\s*/i, '');
+  line.nudge_level = level;
+  if (t_ct) line.t_ct = t_ct;
+  line.reason = ('nudge L' + level + ': ' + baseReason).slice(0, 300);
+  const wokenSet = woken instanceof Set ? woken : null;
+  const wake = !wokenSet || !lineAlreadyFired(line, wokenSet);
+  if (wokenSet && wake) {
+    for (const key of stallLineKeys(line)) wokenSet.add(key);
+  }
+  return { inbox: rows, line, wake, count: unackedWorkCount(rows) };
+}
+
+export function loadStallFired(rows) {
+  return new Set((Array.isArray(rows) ? rows : []).map(x => String(x || '').trim()).filter(Boolean));
+}
+
+export function dumpStallFired(fired, cap = 2000) {
+  const ids = [...(fired instanceof Set ? fired : [])];
+  return ids.length > cap ? ids.slice(-cap) : ids;
+}
+
+/** Who the stall clock may still ring, and the unacked work count for the title. */
+export function planStallWakes({ reason, deadlines, openBySeat, fired, cap = 2000 }) {
+  const firedSet = fired instanceof Set ? fired : loadStallFired(fired);
+  const wakes = [];
+  const nextFired = new Set(firedSet);
+  for (const seat of Object.keys(deadlines || {})) {
+    const open = openBySeat && openBySeat[seat] ? openBySeat[seat] : [];
+    const openCount = unackedWorkCount(open);
+    if (reason === 'stall') {
+      const work = (Array.isArray(open) ? open : []).filter(line => !isClockNudge(line));
+      const fresh = work.filter(line => !lineAlreadyFired(line, firedSet));
+      if (!fresh.length) continue;
+      for (const key of stallWorkKeys(fresh)) nextFired.add(key);
+    }
+    wakes.push({ seat, openCount });
+  }
+  const kept = dumpStallFired(nextFired, cap);
+  return { wakes, fired: new Set(kept) };
+}
+

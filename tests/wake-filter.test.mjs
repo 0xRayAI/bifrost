@@ -2,6 +2,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, recordFlush, viewLine, wakeConfig } from '../wake-gate.mjs';
 import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen, assignCloudRaci } from '../wake-filter.mjs';
+import { clearStallFired } from '../governor.mjs';
 
 const NOW = 1_700_000_000_000;
 const on = readWakeFilter({});
@@ -29,12 +30,33 @@ test('a mention or an owner prompt wakes, and a bare comment does not', () => {
   assert.equal(allowWake(on, 'critic', line({ type: 'start_after', reason: 'start after 2020-01-01T08:00-06:00' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'prompt', kind: 'seat_prompt' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'forge', line({ type: 'issue_comment', title: 'hello' }), ctx()).allow, false);
-  assert.equal(allowWake(on, 'forge', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, false);
-  assert.equal(allowWake(on, 'critic', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, false);
+  assert.equal(allowWake(on, 'forge', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, true);
+  assert.equal(allowWake(on, 'critic', line({ type: 'needs_human', kind: 'needs_human' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'blinky', line({ type: 'needs_human', kind: 'needs_human', to: 'human' }), ctx()).allow, false);
+  assert.equal(allowWake(on, 'blinky', line({ type: 'stop', kind: 'stop' }), ctx()).allow, true);
   for (const type of ['pr_update', 'pr_open', 'issue_open', 'deploy', 'cloud_finished', 'cloud_reply']) {
     assert.equal(allowWake(on, 'forge', line({ type }), ctx()).allow, false, type);
   }
+});
+
+test('a needs_human line addressed to a human does not wake a bot seat', () => {
+  const fired = new Set();
+  const human = line({ type: 'needs_human', kind: 'needs_human', to: 'human', repo: '0xRayAI/xray', number: 1082, id: 'breaker:0xRayAI/xray#1082:1' });
+  for (const seat of ['blinky', 'forge', 'critic']) {
+    assert.equal(allowWake(on, seat, human, ctx({ fired })).allow, false, seat);
+  }
+  assert.equal(fired.size, 0);
+});
+
+test('a needs_human line wakes once per card, even when the breaker id rolls the hour', () => {
+  const fired = new Set();
+  const first = line({ id: 'breaker:0xRayAI/xray#1082:100', type: 'needs_human', kind: 'needs_human', repo: '0xRayAI/xray', number: 1082 });
+  const later = line({ id: 'breaker:0xRayAI/xray#1082:101', type: 'needs_human', kind: 'needs_human', repo: '0xRayAI/xray', number: 1082 });
+  assert.equal(allowWake(on, 'blinky', first, ctx({ fired })).allow, true);
+  assert.equal(allowWake(on, 'blinky', later, ctx({ fired })).allow, false);
+  clearStallFired(fired, first);
+  assert.equal(allowWake(on, 'blinky', later, ctx({ fired })).allow, true);
+  assert.equal(allowWake(on, 'blinky', first, ctx({ fired })).allow, false);
 });
 
 test('a review or a current-head ci_fail wakes only the owner', () => {
@@ -455,6 +477,15 @@ test('a ci_fail wakes only the owed seat on the current head', () => {
 test('a ladder nudge and the stall clock still wake', () => {
   assert.equal(allowWake(on, 'forge', line({ type: 'nudge', reason: 'nudge L1: stale' }), ctx()).allow, true);
   assert.equal(allowWake(on, 'critic', line({ type: 'timed_run', id: 'clock:1:critic' }), ctx()).allow, true);
+});
+
+test('a nudge L1 prefix on a board-only GitHub line does not bypass the filter', () => {
+  for (const type of ['pr_update', 'pr_open', 'pr_commit', 'push', 'deploy', 'pr_review']) {
+    const got = allowWake(on, 'blinky', line({ type, kind: type, reason: 'nudge L1: heads-up: new PR or new head' }), ctx());
+    assert.equal(got.allow, false, type);
+  }
+  // An unacked heads-up stays on the board. The prefix must not turn it into a wake.
+  assert.equal(allowWake(on, 'blinky', line({ type: 'pr_update', reason: 'nudge L2: heads-up' }), ctx()).allow, false);
 });
 
 test('a second station nudge inside the hour is filtered', () => {
