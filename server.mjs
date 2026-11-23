@@ -23,7 +23,7 @@ import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGith
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking } from './wake-gate.mjs';
-import { readWakeFilter, allowWake, owedSeat, commitWake, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
+import { readWakeFilter, allowWake, owedSeat, commitWake, readyPacket, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
 import { initArchive, appendArchive, backfillArchive, readArchive, validArchiveDate, KINDS as ARCHIVE_KINDS, cardHistory, archiveDays, archivedLineBytes, appendTransition, transitionFromEvent, queryTransitions, exportTransitions, archiveRoot, setArchiveSink, foldCardRows, useCardRows, reloadCardRows, adoptFoldedCards, adoptCardBook } from './archive.mjs';
@@ -1471,6 +1471,8 @@ function postSeatLines(parsed, onlySeat) {
   }
   const outgoing = takeBatch(good);
   const touched = new Set(); let added = 0; const fresh = [];
+  // A queued line sits behind the seat's work, but a ready handoff still offers a wake. Busy sets position, not the wake.
+  const offer = [];
   let routedSeat = '';
   let routedQueued = false;
   if (parsed.replace === true && onlySeat && good.length && seatInbox[onlySeat]) {
@@ -1495,7 +1497,7 @@ function postSeatLines(parsed, onlySeat) {
       if (readyAfterFix(s, l)) {
         unackLine(s, l.id);
         dup.t_ct = l.t_ct || ctStamp(Date.now());
-        fresh.push(dup); touched.add(s); added++;
+        fresh.push(dup); offer.push(dup); touched.add(s); added++;
       }
       continue;
     }
@@ -1512,14 +1514,16 @@ function postSeatLines(parsed, onlySeat) {
       touched.add(s);
       touched.add(prior.seat);
       if (!placed.queued) fresh.push(stored);
+      if (!placed.queued || readyPacket(stored)) offer.push(stored);
       continue;
     }
     arr.push(stored); touched.add(s);
     if (!prior) added++;
     if (!placed.queued) fresh.push(stored);
-    if (s === 'builder') { const c = seatInbox['builder-cloud']; if (!c.some(x => x.id === l.id)) { const copy = { ...stored, seat: 'builder-cloud' }; c.push(copy); touched.add('builder-cloud'); fresh.push(copy); } } }
+    if (!placed.queued || readyPacket(stored)) offer.push(stored);
+    if (s === 'builder') { const c = seatInbox['builder-cloud']; if (!c.some(x => x.id === l.id)) { const copy = { ...stored, seat: 'builder-cloud' }; c.push(copy); touched.add('builder-cloud'); fresh.push(copy); offer.push(copy); } } }
   for (const s of touched) saveSeatInbox(s);
-  if (fresh.length) { try { offerLines(fresh); } catch { /* keep the inbox write */ } }
+  if (offer.length) { try { offerLines(offer); } catch { /* keep the inbox write */ } }
   for (const l of fresh) ensurePacketCard(l);
   for (const l of fresh) void arch1Launch.consider(l);
   return { status: 200, added, rejected: refs, ...(routedSeat ? { seat: routedSeat, queued: routedQueued } : {}) };

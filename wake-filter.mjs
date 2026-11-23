@@ -97,6 +97,12 @@ function lineKind(line) {
   return String(line && (line.kind || line.type) || '').trim().toLowerCase();
 }
 
+// A board ready handoff: the line live-inbox --handoff posts, with type packet and kind ready.
+// Its kind is "ready", so the DIRECT set (which matches kind packet) never saw it.
+export function readyPacket(line) {
+  return String(line && line.type || '').trim().toLowerCase() === 'packet' && String(line && line.kind || '').trim().toLowerCase() === 'ready';
+}
+
 function runMark(line) {
   const raw = line && (line.run_id ?? line.check_run_id ?? line.workflow_run_id);
   if (raw != null && String(raw).trim()) return 'run:' + String(raw).trim();
@@ -652,6 +658,11 @@ export function allowWake(config, seat, line, ctx) {
   // A GitHub line that later gets a "nudge L1:" reason prefix is not: that bypass is how pr_heads / pr_update re-woke seats after #83.
   if (kind === 'nudge' || kind === 'timed_run' || kind === 'clock' || String(line.type || '').toLowerCase() === 'nudge') return { allow: true };
   if (DIRECT.has(kind)) return { allow: true };
+  // A ready handoff on the current head wakes the seat it is addressed to. A superseded head is dropped by dropBeforePost (#86).
+  if (readyPacket(line) && currentHead(line, ctx.head, ctx)) {
+    const to = String(line.to || '').trim().toLowerCase();
+    if (!to || to === who) return { allow: true };
+  }
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
   if (REOPEN.has(kind) && ctx.owner === who) return { allow: true };

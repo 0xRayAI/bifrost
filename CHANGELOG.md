@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A board ready handoff (type `packet`, kind `ready`) on the current head wakes the seat it is addressed to. Its kind is `ready`, so the filter's `packet` rule never matched it. A queued ready handoff (the seat is busy) still offers its wake; busy sets queue position, not the wake. A head the card moved past is still dropped, the author's own line still skips, and a delivered line wakes once. #108
 - A review or `critic_fail` line on a sha the card head has moved past, while the card's verdict is stale, is settled: it leaves open work, stops line-nudging the author, and a `review` line is acked by the board sweep. A review at the head stays. #108
 - The collector's `green head returns to critic` line wakes critic once Actions has cached an all-green run list for that full sha, and is remembered like `CI green on current head`. A partial green from the collector still stays quiet. #108
 - The Actions-runs retry counts the first arm and each timer retry. A burst of check events on one pending head no longer spends the 30-try cap and drops the head before CI finishes. #108
