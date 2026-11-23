@@ -158,3 +158,63 @@ test('stale apply clears merged handoffs and keeps a newer ci_pass', async () =>
     fs.rmSync(data, { recursive: true, force: true });
   }
 });
+
+// A FIX on an old head stops ringing the author once the head moves. A review on the current head stays.
+test('a review or critic_fail on a superseded head is settled, and one on the current head stays open', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-superseded-'));
+  const key = 'forge-' + crypto.randomBytes(4).toString('hex');
+  const at = (n, kind, sha, id) => ({
+    id, t_ct: REVIEW_AT, seat: 'forge', from: 'critic', to: 'forge', type: kind, kind,
+    repo: REPO, number: n, sha, title: 'critic ' + kind, url: `https://github.com/${REPO}/pull/${n}`, reason: 'critic ' + kind,
+  });
+  const oldFix = at(50, 'review', OLD, 'review:old-fix');
+  const oldFail = at(50, 'critic_fail', OLD, 'handoff:old-fail');
+  const oldShort = at(52, 'review', OLD, 'review:old-short');
+  const curFix = at(51, 'review', NEW, 'review:cur-fix');
+  const noVerdict = at(53, 'review', OLD, 'review:no-verdict');
+  const open = (n, head, reviewer) => ({
+    key: `${REPO}#${n}`, repo: REPO, number: n, title: 'open pull', url: `https://github.com/${REPO}/pull/${n}`,
+    owner: 'forge', stage: 'review', state: 'live', kind: 'pr', head, ...(reviewer ? { reviewer } : {}),
+  });
+  fs.mkdirSync(path.join(data, 'live', 'inbox'), { recursive: true });
+  fs.mkdirSync(path.join(data, 'feed'), { recursive: true });
+  fs.writeFileSync(path.join(data, 'live', 'inbox', 'forge.jsonl'), [oldFix, oldFail, oldShort, curFix, noVerdict].map(l => JSON.stringify(l)).join('\n') + '\n');
+  fs.writeFileSync(path.join(data, 'live', 'cards.json'), JSON.stringify({
+    updated_ct: '2026-11-19T16:00:00Z',
+    cards: [
+      open(50, NEW, { verdict: 'FIX', sha: OLD, t: Date.parse(REVIEW_AT), at_head: false, stale: true }),
+      open(51, NEW, { verdict: 'FIX', sha: NEW, t: Date.parse(REVIEW_AT), at_head: true, stale: false }),
+      open(52, NEW.slice(0, 7), { verdict: 'FIX', sha: OLD.slice(0, 7), t: Date.parse(REVIEW_AT), at_head: false, stale: true }),
+      open(53, NEW),
+    ],
+  }));
+  fs.writeFileSync(path.join(data, 'feed', 'github-events.json'), JSON.stringify({
+    generated_at: '2026-11-19T16:00:00Z',
+    events: [review(50, OLD), review(51, NEW), review(52, OLD), review(53, OLD)],
+  }));
+  const srv = start(data, { SEAT_KEYS: JSON.stringify({ forge: crypto.createHash('sha256').update(key).digest('hex') }) });
+  try {
+    await srv.ready;
+    const auth = { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' };
+    const open1 = await (await fetch(srv.base + '/inbox/forge', { headers: auth })).json();
+    const openIds = (open1.lines || []).map(l => l.id);
+    assert.equal(openIds.includes(curFix.id), true, 'a review on the current head stays');
+    assert.equal(openIds.includes(noVerdict.id), true, 'a card with no verdict is not superseded');
+    for (const l of [oldFix, oldFail, oldShort]) assert.equal(openIds.includes(l.id), false, l.id + ' stops showing as open work');
+    // The board sweep acks a settled review line. Lines still open are not acked.
+    let acked = [];
+    for (let i = 0; i < 40 && acked.length < 2; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      acked = ackFiles(data).map(r => r.line);
+    }
+    for (const l of [oldFix, oldShort]) assert.equal(acked.includes(l.id), true, l.id + ' is acked by the sweep');
+    assert.equal(acked.includes(oldFail.id), false, 'a critic_fail is hidden from open work, not acked');
+    assert.equal(acked.includes(curFix.id), false);
+    assert.equal(acked.includes(noVerdict.id), false);
+  } finally {
+    const done = new Promise(r => srv.child.exitCode != null || srv.child.signalCode ? r() : srv.child.once('exit', r));
+    srv.child.kill();
+    await done;
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});

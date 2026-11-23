@@ -83,6 +83,7 @@ const AFTER_CLOSE = new Set(['deploy', 'deploy_fail', 'op_deploy', 'merge', 'mer
 const CI_KIND = new Set(['ci_fail', 'ci_pass', 'check_run', 'check_suite', 'workflow_run', 'commit_status']);
 const PUSH_KIND = new Set(['pr_force_push', 'force_push', 'pr_commit', 'pr_update', 'push']);
 const GREEN_REASON = 'CI green on current head';
+export const RETURN_REASON = 'green head returns to critic';
 const RUN_PAGES = 20;
 const RERUN_MS = 60 * 1000;
 // This process only. A redeploy drops the book and fails open, so a duplicate wake is possible.
@@ -397,10 +398,12 @@ export function createCriticHeads(opts) {
     }
   }
 
-  function arm(key, ev, n, now) {
+  // A try is the first arm or a timer retry. A burst of check events on one head shares one fetch and is one try.
+  function arm(key, ev, n, now, timed) {
     let row = book.get(key);
+    const fresh = !row;
     if (!row) row = { tries: 0, started: now, ev, n, repo: ev.repo, sha: fullHeadSha(ev), logged: false };
-    row.tries += 1;
+    if (fresh || timed) row.tries += 1;
     row.ev = ev;
     if (row.tries > RETRY_CAP || now - row.started >= RETRY_WINDOW_MS) {
       if (!row.logged && typeof opts.log === 'function') opts.log('wake: actions runs retry dropped');
@@ -414,7 +417,7 @@ export function createCriticHeads(opts) {
     const delay = Math.max(0, (when || now + RERUN_MS) - now);
     const timer = setTimer(() => {
       timers.delete(key);
-      void noteCi(row.ev, row.n);
+      void noteCi(row.ev, row.n, true);
     }, delay);
     if (timer && typeof timer.unref === 'function') timer.unref();
     timers.set(key, timer);
@@ -444,7 +447,7 @@ export function createCriticHeads(opts) {
     };
   }
 
-  async function noteCi(ev, n) {
+  async function noteCi(ev, n, timed = false) {
     const token = String(opts.token ? opts.token() : '').trim();
     if (!token) return null;
     const repo = String(ev && ev.repo || '').trim();
@@ -471,7 +474,7 @@ export function createCriticHeads(opts) {
     }
     const gapSkip = prior != null && state.retryAt && state.retryAt.get(key) === prior && now < prior && runs == null;
     if (gapSkip || (state.quietUntil && now < state.quietUntil)) return null;
-    arm(key, ev, number, now);
+    arm(key, ev, number, now, timed === true);
     return null;
   }
 
@@ -546,6 +549,20 @@ export function criticGreenLine(ev, checks, opts = {}) {
   };
 }
 
+// The collector's critic-return line says a green head is still critic's. Its sha_color can go green on one
+// finished suite, so it wakes only when githubHeadRuns has cached an all-green run list for that full sha (#86).
+export function greenFetched(runs, line) {
+  const sha = fullHeadSha(line);
+  const parts = String(line && line.repo || '').trim().split('/');
+  if (!sha || parts.length !== 2 || !runs || !(runs.fetched instanceof Map)) return false;
+  return runs.fetched.has(`${parts[0]}/${parts[1]}@${sha}`.toLowerCase());
+}
+
+function greenReason(line) {
+  const reason = String(line && line.reason || '');
+  return reason === GREEN_REASON || reason === RETURN_REASON;
+}
+
 function slots(state) {
   if (!state.stationAt) state.stationAt = new Map();
   if (!Array.isArray(state.greenHeads)) state.greenHeads = [];
@@ -565,7 +582,7 @@ export function commitWake(state, seat, line, now) {
   const book = slots(state);
   const who = String(seat || '').toLowerCase();
   if (stationLine(line)) book.stationAt.set(who, now);
-  if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) rememberGreen(state, line);
+  if (who === 'critic' && greenReason(line)) rememberGreen(state, line);
 }
 
 export function packetSeat(value) {
@@ -640,8 +657,9 @@ export function allowWake(config, seat, line, ctx) {
   if (REOPEN.has(kind) && ctx.owner === who) return { allow: true };
   if ((ctx.closed || lineClosed(line)) && survivesClose(line) && ctx.owner === who) return { allow: true };
   if (kind === 'ci_fail' && ctx.owner === who && currentHead(line, ctx.head, ctx)) return { allow: true };
-  if (who === 'critic' && String(line && line.reason || '') === GREEN_REASON) {
+  if (who === 'critic' && greenReason(line)) {
     if (ctx.closed || lineClosed(line) || !fullHeadSha(line) || greenSeen(state, line)) return { allow: false, reason: 'filter' };
+    if (String(line.reason) === RETURN_REASON && !greenFetched(ctx.runs, line)) return { allow: false, reason: 'filter' };
     return { allow: true };
   }
   if (String(line && line.reason || '') === 'CI green for R' && ctx.owner === who) return { allow: true };

@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWakeState, gateLine, noteSent, recordFlush, viewLine, wakeConfig } from '../wake-gate.mjs';
-import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen, assignCloudRaci } from '../wake-filter.mjs';
+import { allowWake, commitWake, owedSeat, readWakeFilter, filterMode, criticGreenLine, dumpGreenHeads, restoreGreenHeads, rememberGreen, githubHeadRuns, createCriticHeads, greenSeen, assignCloudRaci, RETURN_REASON } from '../wake-filter.mjs';
 import { clearStallFired } from '../governor.mjs';
 
 const NOW = 1_700_000_000_000;
@@ -527,4 +527,96 @@ test('a cooldown skip or a breaker skip does not spend the slot', () => {
   assert.equal(queued.op, 'queue');
   commitWake(open, 'critic', again, NOW + 1000);
   assert.equal(allowWake(on, 'critic', again, ctx({ state: open })).allow, false);
+});
+
+test('a burst of check events on one pending head does not spend the retry cap, and the head still wakes', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  try {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      const done = calls > 1;
+      return { ok: true, status: 200, json: async () => ({ total_count: 2, workflow_runs: [
+        { name: 'A', workflow_id: 1, event: 'pull_request', run_attempt: 1, status: 'completed', conclusion: 'success' },
+        { name: 'B', workflow_id: 2, event: 'pull_request', run_attempt: 1, status: done ? 'completed' : 'in_progress', conclusion: done ? 'success' : null },
+      ] }) };
+    };
+    const sha = 'fb8e41082f55f3e29b75098c52884a9565658945';
+    const wake = createWakeState();
+    const wakes = [];
+    const logs = [];
+    const heads = createCriticHeads({
+      state: { fetched: new Map(), quietUntil: 0, deniedLogged: false },
+      token: () => 'ghs_test',
+      api: () => 'https://api.github.com',
+      fetch: fetchImpl,
+      log: (text) => logs.push(text),
+      seen: (repo, n, head) => greenSeen(wake, { repo, number: n, sha: head }),
+      deliver: (batch) => {
+        for (const ping of Array.isArray(batch) ? batch : [batch]) { wakes.push(ping); rememberGreen(wake, ping); }
+      },
+    });
+    const ev = { repo: '0xRayAI/xray', number: 1233, sha, kind: 'check_run' };
+    // 40 check events land in one ingest, all while one fetch is in flight.
+    await Promise.all(Array.from({ length: 40 }, () => heads.noteCi(ev, 1233)));
+    assert.equal(wakes.length, 0);
+    assert.equal(calls, 1);
+    mock.timers.tick(60_000);
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(logs.includes('wake: actions runs retry dropped'), false);
+    assert.equal(wakes.length, 1);
+    assert.equal(wakes[0].sha, sha);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('the timer still stops a head that never goes green after 30 tries', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  try {
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: [
+      { name: 'A', workflow_id: 1, event: 'pull_request', run_attempt: 1, status: 'in_progress', conclusion: null },
+    ] }) });
+    const logs = [];
+    const heads = createCriticHeads({
+      state: { fetched: new Map(), quietUntil: 0, deniedLogged: false },
+      token: () => 'ghs_test',
+      api: () => 'https://api.github.com',
+      fetch: fetchImpl,
+      log: (text) => logs.push(text),
+      deliver: () => assert.fail('a pending head must not wake'),
+    });
+    const sha = 'fb8e41082f55f3e29b75098c52884a9565658945';
+    await heads.noteCi({ repo: '0xRayAI/xray', number: 1233, sha, kind: 'check_run' }, 1233);
+    for (let i = 0; i < 40; i++) {
+      mock.timers.tick(60_000);
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(logs.filter(text => text === 'wake: actions runs retry dropped').length, 1);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('the critic-return line wakes critic only once Actions has confirmed every run green', () => {
+  const sha = 'fb8e41082f55f3e29b75098c52884a9565658945';
+  const ret = line({ id: 'wake:critic:0xrayai/xray#1233:' + sha, type: 'ci_pass', kind: 'ci_pass', repo: '0xRayAI/xray', number: 1233, sha, reason: RETURN_REASON });
+  assert.equal(RETURN_REASON, 'green head returns to critic');
+  const green = { fetched: new Map([['0xrayai/xray@' + sha, [{ name: 'A', status: 'completed', conclusion: 'success' }]]]) };
+  // A partial green from the collector stays quiet (#86): Actions has not confirmed this head.
+  assert.equal(allowWake(on, 'critic', ret, ctx({ head: sha, runs: { fetched: new Map() } })).allow, false);
+  assert.equal(allowWake(on, 'critic', ret, ctx({ head: sha })).allow, false);
+  const state = createWakeState();
+  assert.equal(allowWake(on, 'critic', ret, ctx({ state, head: sha, runs: green })).allow, true);
+  // Other seats, a closed pull, and a head without a full sha do not wake.
+  assert.equal(allowWake(on, 'forge', ret, ctx({ head: sha, runs: green })).allow, false);
+  assert.equal(allowWake(on, 'critic', ret, ctx({ head: sha, runs: green, closed: true })).allow, false);
+  assert.equal(allowWake(on, 'critic', { ...ret, sha: sha.slice(0, 7) }, ctx({ head: sha, runs: green })).allow, false);
+  // Once sent it is remembered, and the same head from the Actions path is not a second wake.
+  commitWake(state, 'critic', ret, NOW);
+  assert.equal(allowWake(on, 'critic', ret, ctx({ state, head: sha, runs: green })).allow, false);
+  const again = criticGreenLine({ repo: '0xRayAI/xray', number: 1233, sha }, [{ name: 'A', status: 'completed', conclusion: 'success' }], {});
+  assert.equal(allowWake(on, 'critic', again, ctx({ state, head: sha, runs: green })).allow, false);
 });
