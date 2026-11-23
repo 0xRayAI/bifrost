@@ -16,41 +16,24 @@
   var POLL_MS = 60000;
   var PING_MS = 1100;
 
-  var AGENTS = [
-    ['blinky', 'CoS'], ['forge', 'merge'],
-    ['critic', 'gate'], ['herald', 'voice'], ['minime0x', 'muse'], ['nibbler', 'feed scout']
-  ];
-  var SEAT_NAMES = AGENTS.map(function (a) { return a[0]; });
+  // Rail-only until site-config installs the roster. No team is drawn from this file.
+  var AGENTS = [];
+  var SEAT_NAMES = [];
   var COLOR = {
-    blinky: [88, 210, 180], forge: [110, 170, 255],
-    critic: [255, 150, 90], herald: [200, 140, 255], minime0x: [255, 180, 100], nibbler: [240, 120, 190],
-    GitHub: [200, 210, 230], X: [140, 180, 255], 'mymuse.house': [255, 200, 90],
-    lead0x1: [255, 120, 100], grok: [180, 190, 200]
+    GitHub: [200, 210, 230], Railway: [170, 130, 255],
+    CloudAgents: [130, 190, 255], Assistant: [116, 170, 156]
   };
-  var LABEL = { blinky: 'blinky', forge: 'forge', critic: 'critic', herald: 'herald',
-    minime0x: 'minime0x', nibbler: 'nibbler', GitHub: '', X: '', 'mymuse.house': '' };
-  /* Nodes drawn as a glyph instead of a box (the glyph is the name, so the label drops it). */
-  var GLYPH = { X: '\uD835\uDD4F', 'mymuse.house': '\uD83C\uDFE0', nibbler: '\uD83E\uDEB1' };
+  var LABEL = { GitHub: 'GitHub', Railway: 'Railway', CloudAgents: 'Cloud agents', Assistant: 'Assistant' };
+  var GLYPH = {};
   /* Nodes drawn as a vector mark (viewBox 0 0 16 16): GitHub = Octicons mark-github-16 (primer/octicons). */
   var MARK_PATH = { GitHub: 'M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656' };
-  var SUB = { blinky: 'CoS seat', forge: 'continuity', critic: 'gate',
-    herald: 'replies', minime0x: 'muse bot', nibbler: 'feed scout', GitHub: 'PRs', X: '@0xRayAI', 'mymuse.house': 'live site' };
-  var SQUARE = { GitHub: 1, X: 1, 'mymuse.house': 1 };
-  var WHO_LOG = { 'mymuse.house': 'MYMUSE', lead0x1: 'LEAD', minime0x: 'MINIME', GitHub: 'GITHUB',
-    grok: 'GROK', blinky: 'BLINKY', forge: 'FORGE', critic: 'CRITIC', herald: 'HERALD', nibbler: 'NIBBLER', X: 'X' };
-  // render_mesh.py SATS, shifted by (-140, -110) to drop the mp4's header rows.
-  var HUB = [500, 200];
-  var SATS = { blinky: [80, 90], forge: [380, 50], critic: [540, 50],
-    herald: [80, 270], minime0x: [220, 330], nibbler: [540, 330], GitHub: [840, 90], X: [840, 210], 'mymuse.house': [840, 330] };
-  var EDGES = [
-    ['blinky', 'forge'], ['blinky', 'critic'], ['blinky', 'herald'],
-    ['forge', 'critic'], ['minime0x', 'GitHub'], ['forge', 'GitHub'],
-    ['critic', 'GitHub'], ['herald', 'X'], ['blinky', 'X'],
-    ['GitHub', 'mymuse.house'], ['mymuse.house', 'blinky'], ['minime0x', 'critic'],
-    ['forge', 'mymuse.house'], ['critic', 'forge'],
-    ['nibbler', 'X'], ['blinky', 'nibbler']
-  ];
-  var ALIAS = { lead0x1: 'X', grok: 'X' };
+  var SUB = { GitHub: 'PRs · Issues', Railway: 'deploys', CloudAgents: 'cursor agents', Assistant: 'MCP calls' };
+  var SQUARE = { GitHub: 1, Railway: 1 };
+  var WHO_LOG = { GitHub: 'GITHUB', Railway: 'RAILWAY' };
+  var HUB = [460, 200];
+  var SATS = { GitHub: [460, 200], Railway: [460, 340], CloudAgents: [160, 300], Assistant: [760, 300] };
+  var EDGES = [['Railway', 'GitHub'], ['CloudAgents', 'GitHub'], ['Assistant', 'GitHub']];
+  var ALIAS = {};
   var GIT_KINDS = toSet(['pr_open', 'pr_update', 'pr_close', 'merged', 'fix', 'supersede', 'review', 'comment',
     'critic_fail', 'critic_pass', 'ci_pass', 'ci_fail', 'issue_open', 'issue_close',
     'deploy', 'deploy_fail', 'health_ok', 'health_fail', 'probe', 'push', 'feed_push']);
@@ -71,7 +54,7 @@
 
   /* Seat images: bots/<seat>.png for seats in this manifest only (no 404s for the rest).
      Add a seat here when its file lands; any other seat draws a lettered badge. */
-  var BOT_IMAGES = ['blinky', 'forge', 'critic', 'herald', 'minime0x'];
+  var BOT_IMAGES = [];
   function botImage(key) { return BOT_IMAGES.indexOf(key) >= 0 ? 'bots/' + key + '.png' : null; }
 
   /* Blackout countdown (one constant). */
@@ -136,7 +119,7 @@
   /* Hub orbit turns only while something is in flight, and never under reduced motion. */
   function orbitStep(dtMs, pings, reduced) { return pings && pings.length && !reduced ? dtMs / 1000 * 0.25 : 0; }
 
-  /* 0xRay wordmark, drawn from the house recipe (dist-media logo_glyphs word_ink/orange crops,
+  /* Optional house wordmark. The page draws it only when the fleet spec sets wordmark.
      measured from the final stamp) resampled to a W x H cell grid: rows split by '/', runs of
      <value><base36 count>, value 0 void, 1 stencil white #EBEBEB, 2 orange #DC5812. */
   var MARK = { w: 112, h: 44, rle: '061401140v1701170z0g/041601160t1701190z0e/031701170s17011b0z0c/021801180r17011c0z0b/011901190q17011c0z0b/011901190q17041a0z0a/1805170q1706180z0a/1707170p1707170z0a/1707170p1707170b110x/170716032312220617031708160815011407160816/17071703221123110516041708170517011605160717/170717041222120417041708160518011704170617/170713021105112313031605170717051801180317061601/1707120212062214021705170717041901180416061601/170a14052116011606170618041704170416061601/170816061602150617011c051606160417041602/170717061702130717011c051606160417041602/170717071602130717011b0i170416041602/170717071702110817011a0j160516041602/17071708170a1701190f1302160516031603/17071709160a1703170c1602160616021603/1707170917091703170a1802160616021603/1707170a1609170417081a01160616021504/1707170712011708170417071a02160715021504/1707170712021608170417061805160716011504/221507170614011707170517051706160716011504/221507170614021607170517051607160716021305/1707170516011706170617041607160816011305/1707170516021606170617041607160816011305/011705170517021705170617041706160816021106/01190119032216041704170717031b02170815021106/01190119032117041704170717031b02160916011106/02180118032216061703170718031a0217081608/03170117032217061703170817041a0117081608/04160116032201172304170217081705180217091508/061401140z0z0d1707/0z0z0s1707/0z0z0s1608/0z0z0q1808/0z0z0n1a09/0z0z0n1a09/0z0z0n190a/0z0z0n180b/0z0z0n170c' };
@@ -154,21 +137,12 @@
   /* Same mapping as render_mesh.resolve_nodes: which two nodes a ping travels between. */
   function resolveNodes(e) {
     var kind = LEGACY_KIND[e.kind] || e.kind;
-    if (kind === 'x_reply') kind = (e.from === 'herald' || e.from === '0xRayAI') ? 'x_out_reply' : 'x_in_reply';
-    if (kind === 'x_in_mention' || kind === 'x_in_reply') return ['X', 'herald'];
-    if (kind === 'x_out_reply' || kind === 'x_out_root' || kind === 'x_like') return ['herald', 'X'];
-    if (kind === 'deploy' || kind === 'deploy_fail') return ['GitHub', 'mymuse.house'];
-    if (kind === 'health_ok' || kind === 'health_fail' || kind === 'probe') return ['mymuse.house', 'blinky'];
     var src = own(ALIAS, e.from) ? 'GitHub' : e.from;
     var dst = own(ALIAS, e.to) ? 'GitHub' : e.to;
-    if (!own(SATS, src)) src = own(GIT_KINDS, kind) ? 'GitHub' : 'X';
+    if (kind === 'deploy' || kind === 'deploy_fail') return ['GitHub', own(SATS, 'Railway') ? 'Railway' : 'GitHub'];
+    if (!own(SATS, src)) src = 'GitHub';
     if (!own(SATS, dst)) dst = 'GitHub';
-    if (kind === 'critic_fail' || kind === 'critic_pass') {
-      src = 'critic';
-      if (dst === 'critic') dst = 'GitHub';
-    }
-    if (kind === 'ci_pass' || kind === 'ci_fail') src = 'GitHub';
-    if (src === dst) dst = src !== 'GitHub' ? 'GitHub' : 'forge';
+    if (src === dst) dst = src !== 'GitHub' && own(SATS, 'GitHub') ? 'GitHub' : (own(SATS, 'Railway') ? 'Railway' : src);
     return [src, dst];
   }
 
@@ -176,8 +150,7 @@
     var k = e.kind;
     if (k === 'critic_fail' || k === 'ci_fail' || k === 'deploy_fail' || k === 'health_fail') return [255, 110, 90];
     if (k === 'critic_pass' || k === 'ci_pass' || k === 'health_ok' || k === 'deploy') return [120, 230, 150];
-    if (k.indexOf('x_out') === 0 || k.indexOf('x_like') === 0 || k === 'x_root') return COLOR.herald;
-    if (k.indexOf('x_') === 0) return COLOR.X;
+    if (k.indexOf('x_') === 0) return own(COLOR, 'X') || [140, 180, 255];
     if (k === 'feed_push') return [88, 210, 180];   // live-wire push: teal, like the Live control
     return own(COLOR, e.from) || [180, 190, 210];
   }
@@ -207,10 +180,10 @@
     });
   }
 
-  /* A prompt is one line: "Blaze → forge: <note>". Plumbing labels ("prompt sent", "message") are not the note. */
+  /* A prompt is one line: "owner → seat: <note>". Plumbing labels ("prompt sent", "message") are not the note. */
   function promptView(e) {
     if (!e || (e.kind !== 'seat_prompt' && e.kind !== 'prompt_message')) return null;
-    var from = e.from || 'Blaze';
+    var from = e.from || 'owner';
     var to = e.to || '';
     var note = typeof e.note === 'string' ? e.note.trim() : '';
     if (!note && typeof e.label === 'string') {
@@ -254,7 +227,7 @@
   }
 
   var CI_KIND = { ci_pass: 1, ci_fail: 1, check_run: 1, check_suite: 1, workflow_run: 1, commit_status: 1 };
-  /* CI who is the credit (forge, Blaze). from stays the GitHub/CI source for the mesh. */
+  /* CI who is the credit. from stays the GitHub/CI source for the mesh. */
   function whoTag(e) {
     var credit = e && CI_KIND[e.kind] ? String(e.credit || '') : '';
     if (credit && !/^(github|ci)$/i.test(credit)) return credit;

@@ -17,14 +17,13 @@ test('board stats strip: 24h counts + open now from feed.board.stats, textConten
   assert.match(html, /wb\.stats = r\.feed\.board\.stats \|\| null/);
 });
 
-test('stats strip is eight columns, with arch1 backlog before open now and no 24h suffix on either', () => {
-  assert.match(html, /\.wave-stats \{ display: grid; grid-template-columns: repeat\(8, 1fr\);/);
-  const keys = html.match(/var statKeys = \[([^\]]+)\]/);
-  assert.ok(keys, 'statKeys');
-  const order = keys[1];
-  assert.ok(order.indexOf("'arch1_backlog'") < order.indexOf("'open_total'"), order);
-  assert.ok(order.indexOf("'owner_prompts_24h'") < order.indexOf("'arch1_backlog'"), order);
-  assert.match(html, /\['arch1 backlog', S\.arch1_backlog\]/);
+test('stats strip adds the backlog column only when that stat is present', () => {
+  assert.match(html, /\.wave-stats \{ display: grid; grid-template-columns: repeat\(auto-fit, minmax\(7\.5rem, 1fr\)\);/);
+  assert.match(html, /if \(S && S\.arch1_backlog != null\) statCols\.push\(\['arch1_backlog', 'arch1 backlog', S\.arch1_backlog\]\)/);
+  assert.match(html, /statCols\.push\(\['open_total', 'open now', S && S\.open_total\]\)/);
+  const backlogAt = html.indexOf("statCols.push(['arch1_backlog'");
+  const openAt = html.indexOf("statCols.push(['open_total'");
+  assert.ok(backlogAt > 0 && openAt > backlogAt);
   assert.match(html, /var noDay = key === 'owner_prompts_24h' \|\| key === 'open_total' \|\| key === 'arch1_backlog'/);
   assert.match(html, /key === 'open_total' \? ' total'/);
   assert.match(html, /else if \(wb\.statFilter === 'arch1_backlog'\) cards = \[\];/);

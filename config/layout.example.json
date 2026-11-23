@@ -1,0 +1,42 @@
+{
+  "wordmark": true,
+  "foot": "Bifrost · built in public",
+  "board_names": ["mymuse.house"],
+  "aliases": {
+    "Coord": "blinky",
+    "coord": "blinky",
+    "Blaze0x1": "Blaze",
+    "htafolla": "Blaze",
+    "Lead": "Blaze"
+  },
+  "labels": {
+    "arch1": "Arch1",
+    "CloudAgents": "Cloud agents"
+  },
+  "colors": {
+    "blinky": [88, 210, 180],
+    "critic": [255, 150, 90],
+    "forge": [255, 140, 70],
+    "mill": [230, 190, 90],
+    "near": [120, 220, 140],
+    "nibbler": [190, 150, 240],
+    "herald": [240, 120, 180],
+    "arch1": [255, 120, 100],
+    "Blaze": [255, 120, 60]
+  },
+  "sats": {
+    "GitHub": [460, 200],
+    "Blaze": [460, 50],
+    "forge": [640, 70],
+    "mill": [772, 125],
+    "near": [820, 200],
+    "nibbler": [772, 275],
+    "herald": [640, 330],
+    "Railway": [460, 335],
+    "Assistant": [280, 330],
+    "CloudAgents": [148, 275],
+    "arch1": [100, 200],
+    "blinky": [148, 125],
+    "critic": [280, 70]
+  }
+}

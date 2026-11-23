@@ -11,7 +11,7 @@
     document.documentElement.setAttribute('data-theme', theme);
   })();
   </script>
-  <title>🌈 Bifrost · live fleet</title>
+  <title>Bifrost</title>
 <link rel="icon" href="data:,">
   <style>
 /* theme-tokens-start */
@@ -105,13 +105,7 @@
   --spectrum-bg: linear-gradient(90deg, #3a1530, #3a2a10, #123320, #10263a, #24143a);
   --wire: 140, 185, 245;
   --late: 255, 214, 120;
-  --seat-blinky: 88, 210, 180;
-  --seat-critic: 255, 176, 120;
-  --seat-forge: 255, 154, 92;
-  --seat-mill: 214, 196, 140;
-  --seat-arch1: 255, 140, 120;
   --seat-github: 210, 218, 236;
-  --seat-blaze: 255, 138, 90;
   --seat-railway: 186, 156, 255;
   --seat-assistant: 140, 196, 180;
   --seat-builder: 140, 186, 255;
@@ -123,7 +117,6 @@
   --seat-cloudagents: 150, 196, 255;
   --seat-lead: 255, 150, 130;
   --seat-x: 176, 184, 204;
-  --seat-mymuse-house: 255, 210, 120;
 }
 [data-theme="light"] {
   --bg: #f4f6fb;
@@ -215,13 +208,7 @@
   --spectrum-bg: linear-gradient(90deg, #f3d6ea, #f6e7c4, #d7f0e4, #d6e6f8, #e6dcf6);
   --wire: 50, 80, 120;
   --late: 122, 75, 0;
-  --seat-blinky: 0, 110, 98;
-  --seat-critic: 160, 70, 10;
-  --seat-forge: 170, 60, 0;
-  --seat-mill: 92, 68, 16;
-  --seat-arch1: 150, 40, 30;
   --seat-github: 40, 50, 70;
-  --seat-blaze: 160, 50, 10;
   --seat-railway: 80, 40, 160;
   --seat-assistant: 20, 90, 80;
   --seat-builder: 20, 70, 160;
@@ -233,7 +220,6 @@
   --seat-cloudagents: 20, 70, 150;
   --seat-lead: 150, 40, 30;
   --seat-x: 50, 60, 80;
-  --seat-mymuse-house: 120, 80, 0;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
@@ -326,13 +312,7 @@
   --spectrum-bg: linear-gradient(90deg, #f3d6ea, #f6e7c4, #d7f0e4, #d6e6f8, #e6dcf6);
   --wire: 50, 80, 120;
   --late: 122, 75, 0;
-  --seat-blinky: 0, 110, 98;
-  --seat-critic: 160, 70, 10;
-  --seat-forge: 170, 60, 0;
-  --seat-mill: 92, 68, 16;
-  --seat-arch1: 150, 40, 30;
   --seat-github: 40, 50, 70;
-  --seat-blaze: 160, 50, 10;
   --seat-railway: 80, 40, 160;
   --seat-assistant: 20, 90, 80;
   --seat-builder: 20, 70, 160;
@@ -344,7 +324,6 @@
   --seat-cloudagents: 20, 70, 150;
   --seat-lead: 150, 40, 30;
   --seat-x: 50, 60, 80;
-  --seat-mymuse-house: 120, 80, 0;
   }
 }
 /* theme-tokens-end */
@@ -457,7 +436,7 @@ main { max-width: 1560px; }
 .wave-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
 .wave-head b { color: var(--head-strong); font-size: 13px; letter-spacing: .04em; }
 #waveToggle { display: none; }
-.wave-stats { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 6px; }
+.wave-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 4px; margin-top: 6px; }
 .wstat { display: flex; flex-direction: column; align-items: center; padding: 3px 2px; border: 1px solid var(--stat-line); border-radius: 6px; background: var(--stat-bg); color: var(--text); width: 100%; }
 button.wstat { font: inherit; cursor: pointer; }
 button.wstat.on { outline: 2px solid var(--focus); background: var(--panel); }
@@ -735,6 +714,7 @@ footer a { color: var(--foot); }
 <script>window.LIVE_FEED_URL = '/live-events.json';</script>
 <script src="live.js"></script>
 <script src="live-config.js"></script>
+<script src="fleet.js"></script>
 <script src="site-config.js"></script>
 <script>
 (function () {
@@ -745,6 +725,10 @@ footer a { color: var(--foot); }
   var ctx = canvas.getContext('2d');
   var $ = function (id) { return document.getElementById(id); };
   if ($('siteFoot')) $('siteFoot').textContent = L.SITE_FOOT || '';
+  var fleetSpec = window.FLEET_SPEC || {};
+  if (fleetSpec.name && $('siteTitle')) $('siteTitle').textContent = fleetSpec.name;
+  if (fleetSpec.title) document.title = fleetSpec.title;
+  if ($('mark')) $('mark').setAttribute('aria-label', fleetSpec.name || 'Fleet');
   var state = { events: [], live: true, t: Date.now(), generatedAt: null };
   var playing = false, speed = 600, source = '', fetchError = '', lastFrame = performance.now();
   var releaseLive = false;   // the frame after a cap may reach now
@@ -923,8 +907,9 @@ footer a { color: var(--foot); }
   function sameEdge(pk, a, b) { return (pk.src === a && pk.dst === b) || (pk.src === b && pk.dst === a); }
 
   function fixNode(k) {
+    if (L.liveNodeKey) return L.liveNodeKey(k, 'GitHub');
     if (Object.prototype.hasOwnProperty.call(L.SATS, k)) return k;
-    return k === 'critic' && L.SATS.Reviewer ? 'Reviewer' : 'GitHub';   // forge (CI) and unknowns -> GitHub
+    return 'GitHub';
   }
   // Flow direction: an event with a hop list travels hop by hop (A -> B -> C) over its ping time.
   function hopPing(pk) {
@@ -944,17 +929,26 @@ footer a { color: var(--foot); }
     });
   }
   // Fleet state from the feed: seat active = owned file changed or GitHub activity in the last 15 min
+  function fleetNames(k) {
+    if (L.seatNames) return L.seatNames(k);
+    return [k, String(k).toLowerCase()];
+  }
   function fleetActive(k) {
-    var f = window.LIVE_FLEET, name = k === 'blinky' && !(f && f.seats && f.seats.blinky) ? 'Coord' : k;
+    var f = window.LIVE_FLEET;
     if (k === 'CloudAgents') {
       var node = L.cloudNode(f);
-      return !!(node.lit || node.last_ct);
+      return !!(node && (node.lit || node.last_ct));
     }
-    var s = f && f.seats && (f.seats[name] || f.seats[String(name).toLowerCase()]);
-    return !!(s && s.active);
-  }
-  function fleetNames(k) {   // mesh keys are title case; activity stores the seat id in lower case
-    return k === 'blinky' ? ['Coord', 'coord', 'blinky'] : [k, String(k).toLowerCase()];
+    var seats = f && f.seats;
+    if (!seats) return false;
+    var names = fleetNames(k), i;
+    for (i = 0; i < names.length; i++) if (seats[names[i]] && seats[names[i]].active) return true;
+    var want = String(k || '').toLowerCase();
+    var keys = Object.keys(seats);
+    for (i = 0; i < keys.length; i++) {
+      if (String(keys[i]).toLowerCase() === want && seats[keys[i]] && seats[keys[i]].active) return true;
+    }
+    return false;
   }
   // the one seat state for chip + node; views recorded for tests/debug (window.LIVE_SEAT_VIEWS)
   var chipView = {}, nodeView = {}; window.LIVE_SEAT_VIEWS = { chip: chipView, node: nodeView };
@@ -1567,21 +1561,25 @@ footer a { color: var(--foot); }
       var extra = ids.length - shown.length;
       return shown.join(', ') + (extra > 0 ? ' +' + extra + ' more' : '');
     }
-    var statKeys = ['issues_opened_24h', 'issues_closed_24h', 'prs_opened_24h', 'prs_merged_24h', 'prs_closed_unmerged_24h', 'owner_prompts_24h', 'arch1_backlog', 'open_total'];
-    if (S) [['issues opened', S.issues_opened_24h, S.issues_opened_24h_ids], ['issues closed', S.issues_closed_24h, S.issues_closed_24h_ids],
-      ['PRs opened', S.prs_opened_24h, S.prs_opened_24h_ids], ['PRs merged', S.prs_merged_24h, S.prs_merged_24h_ids],
-      ['PRs closed unmerged', S.prs_closed_unmerged_24h, S.prs_closed_unmerged_24h_ids],
-      ['owner prompts', S.owner_prompts_24h, S.owner_prompts_24h_ids, S.owner_prompts_24h_bytes],
-      ['arch1 backlog', S.arch1_backlog],
-      ['open now', S.open_total]].forEach(function (x, i) {
-      var key = statKeys[i];
+    var statCols = [
+      ['issues_opened_24h', 'issues opened', S && S.issues_opened_24h, S && S.issues_opened_24h_ids],
+      ['issues_closed_24h', 'issues closed', S && S.issues_closed_24h, S && S.issues_closed_24h_ids],
+      ['prs_opened_24h', 'PRs opened', S && S.prs_opened_24h, S && S.prs_opened_24h_ids],
+      ['prs_merged_24h', 'PRs merged', S && S.prs_merged_24h, S && S.prs_merged_24h_ids],
+      ['prs_closed_unmerged_24h', 'PRs closed unmerged', S && S.prs_closed_unmerged_24h, S && S.prs_closed_unmerged_24h_ids],
+      ['owner_prompts_24h', 'owner prompts', S && S.owner_prompts_24h, S && S.owner_prompts_24h_ids, S && S.owner_prompts_24h_bytes]
+    ];
+    if (S && S.arch1_backlog != null) statCols.push(['arch1_backlog', 'arch1 backlog', S.arch1_backlog]);
+    statCols.push(['open_total', 'open now', S && S.open_total]);
+    if (S) statCols.forEach(function (x) {
+      var key = x[0];
       var d = wbEl('button', 'wstat' + (key === 'open_total' ? ' total' : '') + (wb.statFilter === key ? ' on' : ''));
       d.type = 'button'; d.setAttribute('aria-pressed', wb.statFilter === key ? 'true' : 'false');
       var noDay = key === 'owner_prompts_24h' || key === 'open_total' || key === 'arch1_backlog';
-      var label = noDay ? x[0] : x[0] + ' 24h';
-      d.appendChild(wbEl('b', '', String(x[1] == null ? '–' : x[1]))); d.appendChild(wbEl('small', '', label));
-      if (x[2] && x[2].length) d.title = idTitle(x[2]);
-      if (x[3] != null) d.title = (d.title ? d.title + ' · ' : '') + x[3] + ' bytes';
+      var label = noDay ? x[1] : x[1] + ' 24h';
+      d.appendChild(wbEl('b', '', String(x[2] == null ? '–' : x[2]))); d.appendChild(wbEl('small', '', label));
+      if (x[3] && x[3].length) d.title = idTitle(x[3]);
+      if (x[4] != null) d.title = (d.title ? d.title + ' · ' : '') + x[4] + ' bytes';
       d.addEventListener('click', function () { wb.statFilter = wb.statFilter === key ? '' : key; wb.key = ''; renderWave(true); });
       strip.appendChild(d); });
     var cards = L.boardAt(wb.allCards || wb.cards, asOf);

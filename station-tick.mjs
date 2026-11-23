@@ -3,7 +3,7 @@
 import { chicagoStamp } from './chicago-stamp.mjs';
 
 export const STATION_SENTENCE = 'Run station and re-read OP-PROC';
-const CORE = ['forge', 'critic', 'blinky'];
+const PLUMBING = new Set(['builder', 'builder-cloud']);
 
 export function stationHourKey(when) {
   const d = when instanceof Date ? when : new Date(when);
@@ -22,14 +22,20 @@ export function stationHourKey(when) {
   return `${match[1]}T${match[2]}`;
 }
 
-export function stationSeats(ids) {
+// `wanted` is the fleet's station list. Omitted, every id except kit plumbing is nudged.
+export function stationSeats(ids, wanted) {
   const have = new Set();
   for (const id of ids || []) {
     const name = String(id || '').toLowerCase();
     if (name) have.add(name);
   }
-  const seats = CORE.filter((seat) => have.has(seat));
-  if (have.has('arch1')) seats.push('arch1');
+  const source = Array.isArray(wanted) ? wanted : [...have];
+  const seats = [];
+  for (const id of source) {
+    const name = String(id || '').toLowerCase();
+    if (!name || !have.has(name) || PLUMBING.has(name) || seats.includes(name)) continue;
+    seats.push(name);
+  }
   return seats;
 }
 
@@ -58,10 +64,10 @@ export function stationLines(hour, seats, now) {
   }));
 }
 
-export function stationDue(when, postedHour, ids) {
+export function stationDue(when, postedHour, ids, wanted) {
   const hour = stationHourKey(when);
   if (!hour || hour === postedHour) return null;
-  const seats = stationSeats(ids);
+  const seats = stationSeats(ids, wanted);
   if (!seats.length) return null;
   return { hour, lines: stationLines(hour, seats, when) };
 }

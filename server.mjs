@@ -1,5 +1,5 @@
 const TURN_OPEN_MS = (Number(process.env.LIVE_TURN_OPEN_MIN) || 20) * 60000;
-const PROMPT_WORK_MS = 10 * 60000;   // a prompt pulse: the seat stays working this long, and Blaze is the sender
+const PROMPT_WORK_MS = 10 * 60000;   // a prompt pulse: the seat stays working this long, and the owner is the sender
 // Seat -> end time (ms), or 0 for an open turn past TURN_OPEN_MS (full clear).
 // An ended turn clears older marks. A newer mark counts only while fresh. A running cloud agent stays.
 let turnRelease = new Map();
@@ -38,6 +38,7 @@ import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundar
 import { createBatch } from './pr-batch.mjs';
 import { idsToAck, idsToAckOnClose } from './ci-clear.mjs';
 import { stationDue } from './station-tick.mjs';
+import { loadFleetFace } from './fleet-face.mjs';
 import { liveLine, backlogOf, nudgeTargets, markShed, settleShed, shedTtlMs, staleSweepIds, stillPostponed } from './inbox-queue.mjs';
 const CI_NODES = loadCiNodes();
 const batch = createBatch();
@@ -128,10 +129,10 @@ for (const f of fs.readdirSync(PUB)) {
   if (!TYPES[ext]) continue;
   STATIC.set('/' + f, { type: TYPES[ext], body: fs.readFileSync(path.join(PUB, f)) });
 }
-// avatars: public/avatars/*.png, served same-origin behind the login (missing file -> 404 -> drawn fallback)
-const AV = path.join(PUB, 'avatars');
-if (fs.existsSync(AV)) for (const f of fs.readdirSync(AV)) {
-  if (/^[a-z0-9._-]+\.png$/i.test(f)) STATIC.set('/avatars/' + f, { type: 'image/png', body: fs.readFileSync(path.join(AV, f)) });
+// Portraits: only a directory this deploy names (LIVE_AVATAR_DIR). The image does not serve a baked-in team.
+const AVATAR_DIR = String(process.env.LIVE_AVATAR_DIR || '').trim();
+if (AVATAR_DIR && fs.existsSync(AVATAR_DIR)) for (const f of fs.readdirSync(AVATAR_DIR)) {
+  if (/^[a-z0-9._-]+\.png$/i.test(f)) STATIC.set('/avatars/' + f.toLowerCase(), { type: 'image/png', body: fs.readFileSync(path.join(AVATAR_DIR, f)) });
 }
 if (STATIC.has('/index.html')) STATIC.set('/', STATIC.get('/index.html'));
 function shellBody(name) {
@@ -316,38 +317,64 @@ function postInbox({ secret, headerSecret, body, lines }) {
 // ---- Live board: the server is the source of truth for seat inboxes, cards and nudges ---------------------------------
 // Seat auth: Builder = its builder-app installation token (ghVerify, unchanged); every other seat = its own key, checked
 // against SEAT_KEYS (Railway variable, JSON seat -> sha256 hex of the key; the keys themselves live only on the box).
-// Our 8 seats (feed/fleet-roster.json) plus the kit's builder / builder-cloud plumbing (installation-token auth, mirror);
-// no route writes to builder. The kit's sample seats (reviewer, tester, qa, coord, operator, triager, ...) are gone: their
-// jobs map to ours (coord -> the CoS role, operator / tester / qa -> the operator role, reviewer -> critic).
-// canonSeat and seatIdOf read those roles. The worktrack alias stores the seat strings
-// cosSeat() and operatorSeat() return. blinky and forge stay the defaults when routing is absent.
-const COS = 'blinky', OPS = 'forge', REVIEW = 'critic';
-const COORD_SEAT = (() => {   // the CoS role (routing seats.coord.seat): pulls the next work on an empty board
-  try { const r = JSON.parse(fs.readFileSync(path.join(process.env.BIFROST_ROUTING_DIR || path.join(COLLECTOR_DIR_EARLY(), 'routing'), 'inbox-roles.json'), 'utf8'));
-    const c = r?.seats?.coord; return c && !c.off && c.seat ? String(c.seat).toLowerCase() : null; } catch { return null; }
-})();
-const OPERATOR_SEAT = (() => {   // the operator role (routing seats.operator.seat): delivers nudges
-  try { const r = JSON.parse(fs.readFileSync(path.join(process.env.BIFROST_ROUTING_DIR || path.join(COLLECTOR_DIR_EARLY(), 'routing'), 'inbox-roles.json'), 'utf8'));
-    const c = r?.seats?.operator; return c && !c.off && c.seat ? String(c.seat).toLowerCase() : null; } catch { return null; }
-})();
-const cosSeat = () => COORD_SEAT || COS;   // the CoS role (routing seats.coord)
-const operatorSeat = () => OPERATOR_SEAT || OPS;   // the operator role (routing seats.operator)
-const SEAT_ALIAS = {
-  coord: cosSeat(), coordinator: cosSeat(), cos: cosSeat(), triager: cosSeat(),
-  operator: operatorSeat(), tester: operatorSeat(), qa: operatorSeat(), lab: operatorSeat(),
-  reviewer: REVIEW,
-};
+// Seat ids come from LIVE_SEAT_IDS or collector/fleet-roster.json. builder / builder-cloud stay kit plumbing.
+// coord / operator / reviewer resolve from LIVE_ROLE_*, routing, then the roster role text. An unmatched role is empty.
+const OWNER_NAME = /^[A-Za-z0-9 ._:@#+\/-]{1,40}$/;
+function ownerFromLine(text) {
+  const line = String(text || '').split(/\r?\n/, 1)[0].trim();
+  return OWNER_NAME.test(line) ? line : '';
+}
+function ownerName() {
+  const env = ownerFromLine(process.env.LIVE_OWNER || '');
+  if (env) return env;
+  const named = String(process.env.LIVE_OWNER_FILE || '').trim();
+  const ownerFile = named || path.join(process.cwd(), 'owner-name');
+  try {
+    if (fs.existsSync(ownerFile) && fs.statSync(ownerFile).isFile()) {
+      const got = ownerFromLine(fs.readFileSync(ownerFile, 'utf8'));
+      if (got) return got;
+    }
+  } catch { /* fall through to HOUSE.md */ }
+  const raw = String(process.env.HOUSE || '').trim();
+  let file = '';
+  if (raw) {
+    const p = path.resolve(raw);
+    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) file = p; } catch { file = ''; }
+  }
+  if (!file) {
+    const dir = process.env.LIVE_HOUSE || path.join(process.cwd(), 'house');
+    const candidate = path.join(dir, 'HOUSE.md');
+    if (fs.existsSync(candidate)) file = candidate;
+  }
+  if (!file) return '';
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return ''; }
+  const section = /(?:^|\n)## Owner\n([\s\S]*?)(?:\n## |$)/.exec(text);
+  const found = /^name:\s*(\S.*?)\s*$/m.exec(section ? section[1] : '');
+  return found ? found[1].trim() : '';
+}
+const FLEET = loadFleetFace({
+  env: process.env,
+  root: path.dirname(fileURLToPath(import.meta.url)),
+  owner: ownerName(),
+});
+STATIC.set('/fleet.js', { type: TYPES['.js'], body: Buffer.from('window.FLEET_SPEC = ' + JSON.stringify(FLEET.spec) + ';\n') });
+const cosSeat = () => FLEET.roles.coord;
+const operatorSeat = () => FLEET.roles.operator;
+const reviewSeat = () => FLEET.roles.review;
+const SEAT_ALIAS = {};
+if (cosSeat()) for (const name of ['coord', 'coordinator', 'cos', 'triager']) SEAT_ALIAS[name] = cosSeat();
+if (operatorSeat()) for (const name of ['operator', 'tester', 'qa', 'lab']) SEAT_ALIAS[name] = operatorSeat();
+if (reviewSeat()) SEAT_ALIAS.reviewer = reviewSeat();
 const COORD_NAMES = new Set(['coord', 'coordinator', 'cos', 'triager']);
 const OPERATOR_NAMES = new Set(['operator', 'tester', 'qa', 'lab']);
-// LIVE_SEAT_IDS (comma list) replaces the fleet's seat ids; builder / builder-cloud are kit plumbing and always kept.
-const SEAT_IDS = process.env.LIVE_SEAT_IDS
-  ? [...new Set(['builder', 'builder-cloud', ...process.env.LIVE_SEAT_IDS.split(',').map(x => x.trim().toLowerCase()).filter(x => /^[a-z0-9][a-z0-9_-]{0,31}$/.test(x))])]
-  : ['builder', 'builder-cloud', 'arch1', 'forge', 'critic', 'blinky', 'herald', 'mill', 'near', 'nibbler', 'sound', 'magnet'];
+// LIVE_SEAT_IDS (comma list) replaces the roster. builder / builder-cloud are kit plumbing and always kept.
+const SEAT_IDS = FLEET.seatIds;
 function canonSeat(name) {
   const id = String(name || '').toLowerCase();
   if (SEAT_IDS.includes(id)) return id;
-  if (COORD_NAMES.has(id)) return cosSeat();
-  if (OPERATOR_NAMES.has(id)) return operatorSeat();
+  if (COORD_NAMES.has(id) && cosSeat()) return cosSeat();
+  if (OPERATOR_NAMES.has(id) && operatorSeat()) return operatorSeat();
   return SEAT_ALIAS[id] || id;
 }
 function seatToken(name) {
@@ -369,7 +396,7 @@ const CARD_SEAT = { 'builder-cloud': 'builder' };
 const jsonEnvObj = name => { try { const o = JSON.parse(process.env[name] || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } };
 configureWorkTrack({
   seatIds: SEAT_IDS, display: { ...SEAT_DISPLAY, ...jsonEnvObj('SEAT_DISPLAY_NAMES') }, alias: SEAT_ALIAS,
-  mirror: { builder: 'builder-cloud' }, launchSeat: 'forge',
+  mirror: { builder: 'builder-cloud' }, launchSeat: operatorSeat(),
   humanTo: process.env.WORK_HUMAN_TO, humanLane: process.env.WORK_HUMAN_LANE,
 });
 const SEAT_KEY_HASH = (() => { try { const o = JSON.parse(process.env.SEAT_KEYS || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } })();
@@ -864,8 +891,8 @@ async function seatOf(req) {   // -> seat id | null; throws when GitHub can't ve
 const seatIdOf = name => { const t = String(name || '').toLowerCase().replace(/[^a-z0-9 -]/g, ' ');
   for (const w of t.split(/\s+/)) {
     if (SEAT_IDS.includes(w) || w === 'lead') return w;
-    if (COORD_NAMES.has(w)) return cosSeat();
-    if (OPERATOR_NAMES.has(w)) return operatorSeat();
+    if (COORD_NAMES.has(w) && cosSeat()) return cosSeat();
+    if (OPERATOR_NAMES.has(w) && operatorSeat()) return operatorSeat();
     if (SEAT_ALIAS[w]) return SEAT_ALIAS[w];
   } return null; };
 const STATE_DIR = path.join(process.env.MESH_DATA_DIR || '/data', 'live');
@@ -1123,7 +1150,7 @@ function lineDone(seat, l) {
   if (!c || c.state === 'closed') return false;
   if (supersededReview(l)) return true;
   const lt = Date.parse(l.t_ct) || 0;
-  if (seat === REVIEW && c.reviewer && c.reviewer.at_head && Number(c.reviewer.t) >= lt) return true;   // verdict at head = Reviewer's step done
+  if (reviewSeat() && seat === reviewSeat() && c.reviewer && c.reviewer.at_head && Number(c.reviewer.t) >= lt) return true;   // verdict at head = the review seat's step done
   return false;
 }
 // Latest review on a pull, same walk as closedItems. A short sha matches by prefix either way.
@@ -2256,7 +2283,7 @@ function mergedHeader(now = Date.now()) {
   h.cloud_agents = foldOpenCloudTurns(cloudAgentBoard(), now);   // first-class board rows: bcId, seat, card, state, last update
     if (h.board) {
     if (ownerName()) h.board.stats = { ...(h.board.stats || {}), ...ownerPromptStats(now) };
-    if (h.board.stats) h.board.stats.arch1_backlog = arch1InboxDepth().backlog;
+    if (h.board.stats && SEAT_IDS.includes('arch1')) h.board.stats.arch1_backlog = arch1InboxDepth().backlog;
     h.board.cloud_agents = h.cloud_agents;
     if (Array.isArray(h.board.cards)) h.board.cards = stampCriticCloud(h.board.cards, h.cloud_agents);
   }
@@ -2445,7 +2472,7 @@ const TRIP_MS = (Number(process.env.BIFROST_TRIPWIRE_MINUTES) > 0 ? Number(proce
 const PER_SEAT_MS = (Number(process.env.BIFROST_RUN_SEAT_MINUTES) > 0 ? Number(process.env.BIFROST_RUN_SEAT_MINUTES) : 2) * 60000;
 const CLOCK_SEATS = (() => {   // who may start a run by hand: BIFROST_CLOCK_SEATS, else the coord (CoS) seat
   const env = String(process.env.BIFROST_CLOCK_SEATS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-  return env.length ? env : COORD_SEAT ? [COORD_SEAT] : [];
+  return env.length ? env : cosSeat() ? [cosSeat()] : [];
 })();
 function readClockState() {
   try {
@@ -2518,7 +2545,7 @@ function clockPicture(now = Date.now()) {
   const wave = waveBoard(bfCards, now);
   return {
     openCards: liveWorkCount(bfCards), scheduled: scheduledCards(now), openSeats: stallOpenSeats(now),
-    coord: COORD_SEAT, planDue: !!wave.planDue, burnQuiet: burnQuiet(weeklyBurnFraction()), nudgeCovered: nudgeCoversOpen(),
+    coord: cosSeat(), planDue: !!wave.planDue, burnQuiet: burnQuiet(weeklyBurnFraction()), nudgeCovered: nudgeCoversOpen(),
   };
 }
 function wakeRun(run) {
@@ -2861,7 +2888,7 @@ function stationTick(now = new Date()) {
   if (!stationTickOn()) return;
   const when = stationClock(now);
   if (!when) return;
-  const due = stationDue(when, stationPosted, SEAT_IDS);
+  const due = stationDue(when, stationPosted, SEAT_IDS, FLEET.station);
   if (!due) return;
   const r = postSeatLines({ lines: due.lines }, null);
   if (r.status !== 200) return;
@@ -3335,7 +3362,11 @@ function healthBody() {   // public: counts, times, ages (s) and wake states; no
     cards_behind: behind, stale_status: staleStatus,
     last_tick: passAt ? new Date(passAt).toISOString() : null, stalled,
     history_ready: historyState.ready, history_redis: historyState.redis, history_cards: historyState.cards,
-    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, route: fleetMode.route, by: fleetMode.by, at: fleetMode.at }, arch1_launch: arch1Launch.health(), arch1_inbox: arch1InboxDepth(), nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
+    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, route: fleetMode.route, by: fleetMode.by, at: fleetMode.at }, seats: FLEET.publicSeats, nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
+  if (SEAT_IDS.includes('arch1')) {
+    body.arch1_launch = arch1Launch.health();
+    body.arch1_inbox = arch1InboxDepth();
+  }
   if (warming) body.status = 'warming';
   return body;
 }
@@ -3720,40 +3751,6 @@ function ctOffset(t) {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${off < 0 ? '-' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
 }
 // Seat activity becomes a live board event (seat to seat traffic), not just a fleet flag (hotfix: board was GitHub-only).
-const OWNER_NAME = /^[A-Za-z0-9 ._:@#+\/-]{1,40}$/;
-function ownerFromLine(text) {
-  const line = String(text || '').split(/\r?\n/, 1)[0].trim();
-  return OWNER_NAME.test(line) ? line : '';
-}
-function ownerName() {
-  const env = ownerFromLine(process.env.LIVE_OWNER || '');
-  if (env) return env;
-  const named = String(process.env.LIVE_OWNER_FILE || '').trim();
-  const ownerFile = named || path.join(process.cwd(), 'owner-name');
-  try {
-    if (fs.existsSync(ownerFile) && fs.statSync(ownerFile).isFile()) {
-      const got = ownerFromLine(fs.readFileSync(ownerFile, 'utf8'));
-      if (got) return got;
-    }
-  } catch { /* fall through to HOUSE.md */ }
-  const raw = String(process.env.HOUSE || '').trim();
-  let file = '';
-  if (raw) {
-    const p = path.resolve(raw);
-    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) file = p; } catch { file = ''; }
-  }
-  if (!file) {
-    const dir = process.env.LIVE_HOUSE || path.join(process.cwd(), 'house');
-    const candidate = path.join(dir, 'HOUSE.md');
-    if (fs.existsSync(candidate)) file = candidate;
-  }
-  if (!file) return '';
-  let text = '';
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return ''; }
-  const section = /(?:^|\n)## Owner\n([\s\S]*?)(?:\n## |$)/.exec(text);
-  const found = /^name:\s*(\S.*?)\s*$/m.exec(section ? section[1] : '');
-  return found ? found[1].trim() : '';
-}
 function promptSender(line) {
   const raw = String(line.from || '').trim();
   const name = ownerName();
@@ -4227,10 +4224,10 @@ async function handle(req, res) {
   if (p === '/fleet-mode' && m === 'POST') {
     const hs = req.headers['x-live-ingest'];
     let who = '';
-    if (typeof hs === 'string' && hs && safeEq(hs, INGEST_SECRET)) who = 'blaze';
+    if (typeof hs === 'string' && hs && safeEq(hs, INGEST_SECRET)) who = ownerName() || 'owner';
     else {
       try { who = await seatOf(req) || ''; } catch { return json(req, res, 503, { error: 'could not verify token, retry' }, { 'Retry-After': '30' }); }
-      if (who !== 'blinky') { req.resume(); return json(req, res, 403, { error: 'not the mode switch' }); }
+      if (!cosSeat() || who !== cosSeat()) { req.resume(); return json(req, res, 403, { error: 'not the mode switch' }); }
     }
     let d; try { d = JSON.parse((await readBody(req, 1024)).toString('utf8')); } catch { return json(req, res, 400, { error: 'invalid json' }); }
     const mode = normalizeFleetMode(d && d.mode);
@@ -4586,7 +4583,7 @@ async function handle(req, res) {
     if (!d || !Array.isArray(d.waves)) return json(req, res, 400, { error: 'waves array required' });
     const now = Date.now();
     WAVE_SEED = d;
-    seedHold = postedCards(d, { now, coord: COORD_SEAT || COS });
+    seedHold = postedCards(d, { now, coord: cosSeat() });
     bfWrite('wave-seed.json', JSON.stringify({ updated_ct: new Date(now).toISOString(), cards: seedHold }));
     publishBoard(new Date(now).toISOString());
     seq++; header = mergedHeader(); fullDirty = true;

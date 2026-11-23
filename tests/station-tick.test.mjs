@@ -34,14 +34,16 @@ test('a throw from the station tick is logged', () => {
   assert.equal(src.includes('catch { /* the next minute retries */ }'), false);
 });
 
-test('arch1 is included only when that id is in the fleet', () => {
-  assert.deepEqual(stationSeats(['forge', 'critic', 'blinky', 'herald']), ['forge', 'critic', 'blinky']);
-  assert.deepEqual(stationSeats(IDS), ['forge', 'critic', 'blinky', 'arch1']);
-  assert.deepEqual(stationSeats(['herald']), []);
+test('a station list nudges only seats that are in the fleet', () => {
+  const wanted = ['forge', 'critic', 'blinky', 'arch1'];
+  assert.deepEqual(stationSeats(['forge', 'critic', 'blinky', 'herald'], wanted), ['forge', 'critic', 'blinky']);
+  assert.deepEqual(stationSeats(IDS, wanted), ['forge', 'critic', 'blinky', 'arch1']);
+  assert.deepEqual(stationSeats(['herald'], wanted), []);
+  assert.deepEqual(stationSeats(['coordinator', 'implementer', 'builder'], null), ['coordinator', 'implementer']);
 });
 
 test('a due hour names one station line per seat and the same hour is quiet', () => {
-  const due = stationDue(OPEN, '', IDS);
+  const due = stationDue(OPEN, '', IDS, ['forge', 'critic', 'blinky', 'arch1']);
   assert.equal(due.hour, HOUR);
   assert.deepEqual(due.lines.map((line) => line.seat), ['forge', 'critic', 'blinky', 'arch1']);
   for (const line of due.lines) {
@@ -51,9 +53,9 @@ test('a due hour names one station line per seat and the same hour is quiet', ()
     assert.equal(line.title, STATION_SENTENCE);
     assert.equal(line.reason, STATION_SENTENCE);
   }
-  assert.equal(stationDue(OPEN, due.hour, IDS), null);
-  assert.equal(stationDue('2026-10-26T18:00:00-05:00', '', IDS), null);
-  const later = stationDue('2026-10-26T08:30:00-05:00', due.hour, IDS);
+  assert.equal(stationDue(OPEN, due.hour, IDS, ['forge', 'critic', 'blinky', 'arch1']), null);
+  assert.equal(stationDue('2026-10-26T18:00:00-05:00', '', IDS, ['forge']), null);
+  const later = stationDue('2026-10-26T08:30:00-05:00', due.hour, IDS, ['forge', 'critic', 'blinky', 'arch1']);
   assert.equal(later.hour, '2026-10-26T08');
   assert.equal(later.lines[0].id, due.lines[0].id);
 });
