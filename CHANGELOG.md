@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A review or `critic_fail` line on a sha the card head has moved past, while the card's verdict is stale, is settled: it leaves open work, stops line-nudging the author, and a `review` line is acked by the board sweep. A review at the head stays. #108
+- The collector's `green head returns to critic` line wakes critic once Actions has cached an all-green run list for that full sha, and is remembered like `CI green on current head`. A partial green from the collector still stays quiet. #108
+- The Actions-runs retry counts the first arm and each timer retry. A burst of check events on one pending head no longer spends the 30-try cap and drops the head before CI finishes. #108
+
 - `/healthz` `wakes` reports `disabled` when the last attempt was a paused routine (HTTP 400, automation disabled), and `stale` when a fail is older than 6 hours, instead of leaving a sticky `fail`. #105
 - A later line nudge updates the existing inbox row in place (same id, bumped level and time). It does not append a second line. Once the fired set holds that line's key, L2 and L3 of the ladder do not wake; that is intended. The key is dropped when the line is acked or the card closes, so later stale work on the same card can fire once more.
 - After the #83 wake filter, two holes still rang seats. A later line nudge copied a board-only GitHub line (a new-head heads-up, a push, a deploy) and prefixed `nudge L1:` on the reason, which the filter treated as an act-now signal. The stall clock also minted a new `clock:<started_at>` id on every run, so one stale line (a #1082 breaker, for example) could wake the seat over and over, and the title counted those clock lines as open work. A stall now fires at most once per card or line id and the title count matches the unacked work inbox. A `needs_human` line to a seat wakes once per card; a line addressed to a human does not wake a bot. Part of 0xRayAI/xray#942.

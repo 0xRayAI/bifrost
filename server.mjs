@@ -627,6 +627,7 @@ function offerLines(lines) {
       headAt: headUpdatedAt(card),
       closed: itemClosed(w.line && w.line.repo, w.line && w.line.number),
       fired: stallFired,
+      runs: actionRuns,
     });
     if (!kept.allow) { recordSkip(seat, w.line, 'filter'); continue; }
     const d = gateLine({ seat, line: w.line }, wakeState, now, cfg);
@@ -1103,10 +1104,22 @@ function arch1InboxDepth() {
   const head = liveLine(rows, queueOpts('arch1'));
   return { open: rows.length, head: head.length, backlog: Math.max(0, rows.length - head.length) };
 }
+// A review or FIX on a sha the card head has moved past, while the card's verdict is stale (reviewer.at_head false), is superseded.
+// The author already pushed the fix. It is settled and stops nudging. A review at the head, or a card with no verdict, is not.
+const REVIEW_LINE = new Set(['review', 'critic_fail']);
+function supersededReview(l) {
+  if (![l && l.kind, l && l.type].some(v => REVIEW_LINE.has(String(v || '').toLowerCase()))) return false;
+  const c = lineCard(l);
+  const sha = String(l.sha || '').trim().toLowerCase();
+  const head = String(c && (c.sha || c.head_sha || c.head) || '').trim().toLowerCase();
+  if (!c || !c.reviewer || c.reviewer.at_head !== false || sha.length < 7 || head.length < 7) return false;
+  return !(sha.startsWith(head) || head.startsWith(sha));
+}
 function lineDone(seat, l) {
   if (itemClosed(l.repo, l.number)) return false;
   const c = lineCard(l);
   if (!c || c.state === 'closed') return false;
+  if (supersededReview(l)) return true;
   const lt = Date.parse(l.t_ct) || 0;
   if (seat === REVIEW && c.reviewer && c.reviewer.at_head && Number(c.reviewer.t) >= lt) return true;   // verdict at head = Reviewer's step done
   return false;
@@ -1143,6 +1156,7 @@ function settledLine(l) {
   const number = Number(l && l.number);
   if (!l || !l.repo || !Number.isInteger(number) || number < 1) return false;
   if (itemClosed(l.repo, number)) return true;
+  if (supersededReview(l)) return true;
   if (aheadOfReview(l)) return false;
   const c = lineCard(l);
   if (!c) return false;
