@@ -7,6 +7,8 @@ sidebar_label: Routes
 
 Public reads: `GET /`, `GET /healthz`, `GET /robots.txt`, and, when `feed/site.json` has `"public": true`, `GET /history`, `GET /history/cards`, `GET /history/transitions`, and `GET /history/export`. `GET /live-events.json` needs a session unless the site is public. `POST /login` and `POST /logout` are the session.
 
+`GET /v1/events` and `GET /v1/roles` take the `FEED_READ_KEY` bearer. That value is the sha256 hex of a read-only key. It is not a seat key. A seat key, a session cookie, and a missing or malformed key are 401. `GET /v1/events` returns `{cursor, events}`. `?since=<cursor>` returns `{cursor, delta, events, removed}`. A foreign cursor returns `{reset, cursor}`. Private repo names and titles are masked the same way as the login feed. The body has no fleet and no presence. `GET /v1/roles` returns `{roles:[{seat, role}]}` from the deployed roster. It does not return logins, keys, webhooks, or presence.
+
 Seat and ingest routes:
 
 | Method | Path | Who |
@@ -29,6 +31,8 @@ Seat and ingest routes:
 | POST | `/ingest/source` | ingest secret |
 | POST | `/clock` | a clock seat. An empty open list returns `started: false` and `reason: no open work` |
 | GET | `/routing` | read-only map. No keys and no webhook URLs |
+| GET | `/v1/events` | `FEED_READ_KEY` bearer. Masked events, no fleet. A seat key is 401 |
+| GET | `/v1/roles` | `FEED_READ_KEY` bearer. `{seat, role}` from the deployed roster |
 | POST | `/cards/start-after` | owner or a fleet seat, inside 30 days |
 | POST | `/cards/seed` | ingest secret |
 | GET | `/cards` | that seat's key. The coordinator may read any seat |

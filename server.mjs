@@ -400,6 +400,12 @@ configureWorkTrack({
   humanTo: process.env.WORK_HUMAN_TO, humanLane: process.env.WORK_HUMAN_LANE,
 });
 const SEAT_KEY_HASH = (() => { try { const o = JSON.parse(process.env.SEAT_KEYS || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } })();
+// Read-only feed key. One sha256 hex in FEED_READ_KEY, never a SEAT_KEYS entry and never a raw secret.
+// Missing or not 64 hex fails closed. A bearer that matches it is not a seat.
+const FEED_READ_KEY = (() => {
+  const v = String(process.env.FEED_READ_KEY || '').trim().toLowerCase();
+  return /^[0-9a-f]{64}$/.test(v) ? v : '';
+})();
 // Inbox wake. SEAT_WEBHOOKS is JSON {seat: {url, key_env?, header?}}. The key is process.env[key_env], else
 // process.env.WAKE_KEY_<SEAT> (seat upper-cased, '-' -> '_'; key_env may be omitted), sent as
 // Authorization: Bearer <key> unless header names a different header (then the raw key). A quiet seat sends after
@@ -885,8 +891,16 @@ async function seatOf(req) {   // -> seat id | null; throws when GitHub can't ve
   const tok = bearerOf(req); if (!tok) return null;
   if (tok.startsWith('ghs_')) { const s = await ghVerify(tok); return s ? String(s).toLowerCase() : null; }
   const h = sha256hex(tok);
+  // A feed key is not a seat. Matching it returns null before any seat id is considered.
+  if (FEED_READ_KEY && safeEq(h, FEED_READ_KEY)) return null;
   for (const s of SEAT_IDS) { const v = SEAT_KEY_HASH[s]; if (s !== 'builder' && typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) && safeEq(h, v)) return s; }
   return null;
+}
+function feedKeyOk(req) {   // boolean. Never seatOf, never touchSeat.
+  if (!FEED_READ_KEY) return false;
+  const tok = bearerOf(req);
+  if (!tok || tok.startsWith('ghs_')) return false;
+  return safeEq(sha256hex(tok), FEED_READ_KEY);
 }
 const seatIdOf = name => { const t = String(name || '').toLowerCase().replace(/[^a-z0-9 -]/g, ' ');
   for (const w of t.split(/\s+/)) {
@@ -2971,6 +2985,30 @@ function since(c, raw = false) {   // raw: unmasked (ingest-secret inbox routing
   const events = []; for (const v of evs.values()) if (v.s > s) events.push(mk(v.e));
   return { ...(raw ? header : maskHeader(header)), delta: true, cursor: cursor(), events, removed: removed.filter(r => r.s > s).map(r => r.id) };
 }
+// Stable read for a feed key. The page feed keeps header.fleet. This one does not: no presence, no roster, no board.
+function feedView(sinceParam) {
+  if (sinceParam == null || sinceParam === '') return { cursor: cursor(), events: [...evs.values()].map(v => mask(v.e)) };
+  const d = since(sinceParam);
+  if (d === 'same') return 'same';
+  if (!d) return { reset: true, cursor: cursor() };
+  return { cursor: d.cursor, delta: true, events: d.events, removed: d.removed };
+}
+function roleList() {
+  const roster = configuredRoster(process.env, [
+    COLLECTOR_DIR_EARLY(),
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'feed'),
+  ]);
+  const roles = [];
+  for (const [seat, role] of Object.entries(roster.roles || {})) {
+    if (typeof seat !== 'string' || typeof role !== 'string') continue;
+    const id = seat.trim();
+    const job = role.trim();
+    if (!id || !job) continue;
+    roles.push({ seat: id, role: job });
+  }
+  roles.sort((a, b) => a.seat.localeCompare(b.seat));
+  return { roles };
+}
 
 // ---- GitHub collector (Railway): python child with ONLY the read-only token; writes a feed file on the volume ----
 // GITHUB_READ_TOKEN = fine-grained, read-only (no Checks permission: suites/runs come from Actions instead). The child
@@ -3077,6 +3115,15 @@ function assignToken() {
       resolve(code === 0 && minted.startsWith('ghs_') ? minted : '');
     });
   });
+}
+function learnFeedRepos() {
+  if (PUBLIC || process.env.COLLECTOR !== 'off') return;
+  const tok = process.env.GITHUB_READ_TOKEN || '';
+  if (!tok || !(process.env.COLLECTOR_ORG || '').trim()) return;
+  collectorRepos(tok).then(list => {
+    collector.repos = list;
+    process.stdout.write(`collector: repos ${list.map(repoTag).join(' ')}\n`);
+  }).catch(e => process.stdout.write('collector: ' + redactRepos(String(e && e.message || e)).slice(0, 80) + '\n'));
 }
 async function startCollector() {
   const tok = process.env.GITHUB_READ_TOKEN || '';
@@ -4103,6 +4150,7 @@ function actRateOk(seat, now = Date.now()) {
 const actFails = new Map();  // ip -> [timestamps] (bad activity keys)
 function activitySeatOfKey(tok) {   // every seat but builder posts with its own SEAT_KEYS entry, only as itself
   const h = sha256hex(tok);
+  if (FEED_READ_KEY && safeEq(h, FEED_READ_KEY)) return '';
   for (const id of SEAT_IDS) {
     if (id === 'builder') continue;
     const want = SEAT_KEY_HASH[id];
@@ -4544,6 +4592,14 @@ async function handle(req, res) {
     if (n > 0) publishHeader();
     return json(req, res, 200, { ok: true, postponed: n, open: seatOpenRows(who, false).length });
   }
+  if (p === '/v1/events' || p === '/v1/roles') {   // read-only feed key. Never seatOf, never touchSeat.
+    if (m !== 'GET') { req.resume(); return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET' }); }
+    if (!feedKeyOk(req)) return json(req, res, 401, { error: 'unauthorized' });
+    if (p === '/v1/roles') return json(req, res, 200, roleList());
+    const view = feedView(url.searchParams.has('since') ? (url.searchParams.get('since') || '') : null);
+    if (view === 'same') return send(req, res, 304, 'application/json; charset=utf-8', Buffer.alloc(0), { ETag: `"${cursor()}"` });
+    return json(req, res, 200, view);
+  }
   if (p === '/routing') {   // GET /routing: the routing map, read-only (seat, login, aliases, status). No keys, no webhook URLs.
     if (m !== 'GET') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET' });
     let who = null; try { who = await seatOf(req); } catch { /* fall through to session / public */ }
@@ -4837,6 +4893,7 @@ async function openMesh() {
   if (webhookBase.endsWith(':0')) process.env.CURSOR_WEBHOOK_BASE = 'http://127.0.0.1:' + bound;
   console.log(`live mesh listening on :${bound} (${PUBLIC ? 'public: no password, no masking' : 'gated'})`);
   void warmHistory();
+  learnFeedRepos();
   // The stall clock starts once the port is open, so a slow bind is not a stall.
   if (process.env.COLLECTOR !== 'off') {
     setInterval(readCollectorFeed, 2000).unref();
