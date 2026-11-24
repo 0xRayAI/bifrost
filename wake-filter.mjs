@@ -16,17 +16,27 @@ function kindOf(line) {
   return String(line && (line.kind || line.type) || '').trim().toLowerCase();
 }
 
+function reviewerShape(env, parsed) {
+  const raw = env.SEAT_WAKE_REVIEWER_ON_NEW_HEAD == null ? '' : String(env.SEAT_WAKE_REVIEWER_ON_NEW_HEAD).trim().toLowerCase();
+  if (raw === '1' || raw === 'true') return { reviewerOnNewHead: true, reviewerSeats: null };
+  const flag = parsed && parsed.reviewer_on_new_head;
+  if (flag === true) return { reviewerOnNewHead: true, reviewerSeats: null };
+  if (flag && typeof flag === 'object' && !Array.isArray(flag)) return { reviewerOnNewHead: false, reviewerSeats: flag };
+  return { reviewerOnNewHead: false, reviewerSeats: null };
+}
+
 export function readWakeFilter(env = {}, roster = null) {
   const raw = env.SEAT_WAKE_FILTER == null ? '' : String(env.SEAT_WAKE_FILTER).trim();
-  if (raw === 'all' || raw === 'off') return { mode: 'all', seats: {} };
   let parsed = null;
   if (raw.startsWith('{')) {
     try { parsed = JSON.parse(raw); } catch { parsed = null; }
   }
   if (!parsed && roster && typeof roster.wake_filter === 'object') parsed = roster.wake_filter;
+  const reviewer = reviewerShape(env, parsed);
+  if (raw === 'all' || raw === 'off') return { mode: 'all', seats: {}, ...reviewer };
   const seats = parsed && parsed.seats && typeof parsed.seats === 'object' ? parsed.seats : {};
   const mode = parsed && parsed.mode === 'all' ? 'all' : 'actionable';
-  return { mode, seats };
+  return { mode, seats, ...reviewer };
 }
 
 export function filterMode(config, seat) {
@@ -675,5 +685,49 @@ export function allowWake(config, seat, line, ctx) {
   }
   if (String(line && line.reason || '') === 'CI green for R' && ctx.owner === who) return { allow: true };
   if (assignedR(line, who)) return { allow: true };
+  if (reviewerHeadWake(config, who, line, ctx)) return { allow: true };
   return { allow: false, reason: 'filter' };
+}
+
+function reviewerOn(config, seat) {
+  if (!config) return false;
+  const per = config.reviewerSeats;
+  if (per && typeof per === 'object' && Object.prototype.hasOwnProperty.call(per, seat)) return per[seat] === true;
+  return config.reviewerOnNewHead === true;
+}
+
+function reviewerHeadToken(seat, line) {
+  const who = String(seat || '').toLowerCase();
+  const repo = String(line && line.repo || '').trim().toLowerCase();
+  const n = Number(line && line.number);
+  const sha = lineSha(line);
+  if (!who || !repo || !Number.isInteger(n) || n < 1 || sha.length < 7) return '';
+  return `${who}|${repo}#${n}|${sha}`;
+}
+
+function reviewerHeadSeen(state, token) {
+  const book = slots(state);
+  if (book.reviewerHeads && book.reviewerHeads.has(token)) return true;
+  for (const key of book.delivered.keys) {
+    if (key === token || String(key).startsWith(token + '|')) return true;
+  }
+  return false;
+}
+
+// Opt-in. Default off. One wake per seat, pull, and head sha. Draft and closed stay quiet.
+function reviewerHeadWake(config, seat, line, ctx) {
+  if (!reviewerOn(config, seat)) return false;
+  const kind = kindOf(line);
+  if (!PUSH_KIND.has(kind) && kind !== 'pr_open') return false;
+  if (line && (line.draft === true || String(line.draft || '').toLowerCase() === 'true')) return false;
+  if (ctx && ctx.closed) return false;
+  if (lineClosed(line)) return false;
+  const token = reviewerHeadToken(seat, line);
+  const state = ctx && ctx.state;
+  if (!token || !state) return false;
+  if (reviewerHeadSeen(state, token)) return false;
+  const book = slots(state);
+  if (!book.reviewerHeads) book.reviewerHeads = new Set();
+  book.reviewerHeads.add(token);
+  return true;
 }

@@ -620,3 +620,18 @@ test('the critic-return line wakes critic only once Actions has confirmed every 
   const again = criticGreenLine({ repo: '0xRayAI/xray', number: 1233, sha }, [{ name: 'A', status: 'completed', conclusion: 'success' }], {});
   assert.equal(allowWake(on, 'critic', again, ctx({ state, head: sha, runs: green })).allow, false);
 });
+
+test('a new head wakes the reviewer only when that opt-in is on, once per sha', () => {
+  const head = line({ type: 'pr_commit', kind: 'pr_commit', sha: 'abc1234' });
+  assert.equal(allowWake(on, 'critic', head, ctx()).allow, false);
+  const opted = readWakeFilter({ SEAT_WAKE_FILTER: JSON.stringify({ reviewer_on_new_head: true }) });
+  const state = createWakeState();
+  assert.equal(allowWake(opted, 'critic', head, ctx({ state })).allow, true);
+  assert.equal(allowWake(opted, 'critic', line({ type: 'pr_update', kind: 'pr_update', sha: 'abc1234' }), ctx({ state })).allow, false);
+  assert.equal(allowWake(opted, 'critic', line({ type: 'pr_commit', kind: 'pr_commit', sha: 'abc1234', draft: true }), ctx()).allow, false);
+  assert.equal(allowWake(opted, 'critic', line({ type: 'pr_commit', kind: 'pr_commit', sha: 'abc1234', state: 'closed' }), ctx()).allow, false);
+  const only = readWakeFilter({ SEAT_WAKE_FILTER: JSON.stringify({ reviewer_on_new_head: { critic: true } }) });
+  assert.equal(allowWake(only, 'forge', head, ctx()).allow, false);
+  assert.equal(allowWake(only, 'critic', head, ctx()).allow, true);
+  assert.equal(readWakeFilter({ SEAT_WAKE_REVIEWER_ON_NEW_HEAD: '1' }).reviewerOnNewHead, true);
+});

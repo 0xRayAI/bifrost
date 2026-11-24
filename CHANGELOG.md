@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A throw from the station tick is logged. The next minute still runs.
+- One login, alias, or `@handle` claimed by two seats is a startup warning and a `conflicts` array on `GET /routing`. The process still boots. The first seat in the map keeps the claim. `wake_filter.reviewer_on_new_head` wakes a reviewer once per pull head and stays off.
 - A board ready handoff (type `packet`, kind `ready`) on the current head wakes the seat it is addressed to. Its kind is `ready`, so the filter's `packet` rule never matched it. A queued ready handoff (the seat is busy) still offers its wake; busy sets queue position, not the wake. A head the card moved past is still dropped, the author's own line still skips, and a delivered line wakes once. #108
 - A review or `critic_fail` line on a sha the card head has moved past, while the card's verdict is stale, is settled: it leaves open work, stops line-nudging the author, and a `review` line is acked by the board sweep. A review at the head stays. #108
 - The collector's `green head returns to critic` line wakes critic once Actions has cached an all-green run list for that full sha, and is remembered like `CI green on current head`. A partial green from the collector still stays quiet. #108
