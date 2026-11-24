@@ -822,7 +822,7 @@ async function flushWake(seat) {
     if (result.ok) {
       recordFlush(wakeState, seat, batch, result, Date.now());
       persistWoken();
-      touchSeat(seat); wakeOkAt[seat] = st.status.at; persistWakeOk();
+      wakeOkAt[seat] = st.status.at; persistWakeOk();
       serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
     } else releaseWaking(wakeState, seat, batch);
   }
@@ -845,7 +845,7 @@ async function flushWake(seat) {
   armWake(seat);
   try { publishHeader(); } catch { /* the inbox line is already durable */ }
 }
-// Last time this process saw each seat act through its inbox (wake 2xx, inbox read, ack); counts toward fleet "active".
+// Last time this process saw each seat act through its inbox (read, ack). A delivered wake is wake-ok telemetry and does not call touchSeat.
 // Acks survive a restart as append-only archive rows and are folded in at startup.
 // The last good wake survives too: persistWakeOk writes wake-ok.json, and loadPersistedWakes restores the last non-skipped wakes.jsonl row.
 const seatTouch = {};
@@ -2244,7 +2244,7 @@ function mergedHeader(now = Date.now()) {
   const fleet = mergeFleet(g?.fleet, b?.fleet, stale, now);
   if (fleet) { if (b && !stale) evalSilent(fleet, now); h.fleet = fleet; }   // only with a fresh box view (no restart flaps)
   const df = dotsFleet(h.fleet, now); if (df) h.fleet = df;
-  const tf = foldSeatTouch(h.fleet, seatTouch, now); if (tf) h.fleet = tf;   // wake / read / ack activity
+  const tf = foldSeatTouch(h.fleet, seatTouch, now); if (tf) h.fleet = tf;   // read / ack activity
   const af = applyStoredActivity(h.fleet, now); if (af) h.fleet = af;   // open turns and tasks (activity.jsonl)
   h.track = trackView(now);   // Cursor agents, packets, wakes and blockers rebuilt from the volume
   h.cloud_agents = foldOpenCloudTurns(cloudAgentBoard(), now);   // first-class board rows: bcId, seat, card, state, last update
@@ -3894,6 +3894,7 @@ function applyStoredActivity(fleet, now) {
   const prompted = new Map();
   for (const line of activity) {
     if (!line || typeof line.seat !== 'string') continue;
+    if (line.by === 'server' && line.tag === 'wake') continue;   // a delivered wake is not presence
     if (line.kind === 'turn' && cloudTurnId(line.tag)) continue;   // bc-… track is the agent, not the seat
     const seat = line.seat.toLowerCase();
     if (!SEAT_IDS.includes(seat)) continue;
