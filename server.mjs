@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
-import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
+import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins, routingConflictsFromDir } from './routes.mjs';
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
@@ -822,7 +822,7 @@ async function flushWake(seat) {
     if (result.ok) {
       recordFlush(wakeState, seat, batch, result, Date.now());
       persistWoken();
-      touchSeat(seat); wakeOkAt[seat] = st.status.at; persistWakeOk();
+      wakeOkAt[seat] = st.status.at; persistWakeOk();
       serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
     } else releaseWaking(wakeState, seat, batch);
   }
@@ -845,7 +845,7 @@ async function flushWake(seat) {
   armWake(seat);
   try { publishHeader(); } catch { /* the inbox line is already durable */ }
 }
-// Last time this process saw each seat act through its inbox (wake 2xx, inbox read, ack); counts toward fleet "active".
+// Last time this process saw each seat act through its inbox (read, ack). A delivered wake is wake-ok telemetry and does not call touchSeat.
 // Acks survive a restart as append-only archive rows and are folded in at startup.
 // The last good wake survives too: persistWakeOk writes wake-ok.json, and loadPersistedWakes restores the last non-skipped wakes.jsonl row.
 const seatTouch = {};
@@ -1221,6 +1221,8 @@ if (!ROUTING.ok) console.log('ROUTING: FAIL ' + (ROUTING.error || '') + (ROUTING
 // entry is served as refused at /routing, ROUTING.ok goes false, and the CoS gets a board nudge. Unverified (no token,
 // rate limit, network) is flagged, never refused.
 const ROUTING_DIR = process.env.BIFROST_ROUTING_DIR || path.join(COLLECTOR_DIR_EARLY(), 'routing');
+ROUTING.conflicts = routingConflictsFromDir(ROUTING_DIR);
+if (ROUTING.conflicts.length) process.stderr.write('ROUTING: WARN one login or alias claimed by two seats: ' + ROUTING.conflicts.map(c => c.handle + ' (' + c.seats.join(', ') + ')').join('; ') + '\n');
 const ROUTING_BASE_OK = ROUTING.ok;
 let ROUTING_MAP = readRoutingMap(ROUTING_DIR).map(e => ({ ...e, status: e.login ? 'unverified' : 'no_login' }));
 const loginResolver = createLoginResolver({ api: GITHUB_API, token: process.env.GITHUB_READ_TOKEN || '',
@@ -2244,7 +2246,7 @@ function mergedHeader(now = Date.now()) {
   const fleet = mergeFleet(g?.fleet, b?.fleet, stale, now);
   if (fleet) { if (b && !stale) evalSilent(fleet, now); h.fleet = fleet; }   // only with a fresh box view (no restart flaps)
   const df = dotsFleet(h.fleet, now); if (df) h.fleet = df;
-  const tf = foldSeatTouch(h.fleet, seatTouch, now); if (tf) h.fleet = tf;   // wake / read / ack activity
+  const tf = foldSeatTouch(h.fleet, seatTouch, now); if (tf) h.fleet = tf;   // read / ack activity
   const af = applyStoredActivity(h.fleet, now); if (af) h.fleet = af;   // open turns and tasks (activity.jsonl)
   h.track = trackView(now);   // Cursor agents, packets, wakes and blockers rebuilt from the volume
   h.cloud_agents = foldOpenCloudTurns(cloudAgentBoard(), now);   // first-class board rows: bcId, seat, card, state, last update
@@ -2862,8 +2864,15 @@ function stationTick(now = new Date()) {
   stationPosted = due.hour;
   if (r.added) { seq++; header = mergedHeader(); fullDirty = true; }
 }
-setInterval(() => { try { stationTick(); } catch { /* the next minute retries */ } }, 60000).unref();
-try { stationTick(); } catch { /* the next minute retries */ }
+function runStationTick() {
+  try { stationTick(); }
+  catch (err) {
+    const why = String(err && err.message ? err.message : err).slice(0, 160);
+    process.stderr.write(`station nudge throw ${why}\n`);
+  }
+}
+setInterval(runStationTick, 60000).unref();
+runStationTick();
 header = mergedHeader();
 function full() {   // built lazily: only the first full GET after a change pays for stringify + gzip
   refreshWorking();
@@ -3894,6 +3903,7 @@ function applyStoredActivity(fleet, now) {
   const prompted = new Map();
   for (const line of activity) {
     if (!line || typeof line.seat !== 'string') continue;
+    if (line.by === 'server' && line.tag === 'wake') continue;   // a delivered wake is not presence
     if (line.kind === 'turn' && cloudTurnId(line.tag)) continue;   // bc-… track is the agent, not the seat
     const seat = line.seat.toLowerCase();
     if (!SEAT_IDS.includes(seat)) continue;
@@ -4537,7 +4547,7 @@ async function handle(req, res) {
     if (m !== 'GET') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET' });
     let who = null; try { who = await seatOf(req); } catch { /* fall through to session / public */ }
     if (!who && !PUBLIC && !validSession(req)) return json(req, res, 401, { error: 'unauthorized' });
-    return json(req, res, 200, { ok: ROUTING.ok, seats: ROUTING_MAP.map(e => ({ seat: e.seat, login: e.login, aliases: e.aliases, status: e.status })) });
+    return json(req, res, 200, { ok: ROUTING.ok, conflicts: ROUTING.conflicts || [], seats: ROUTING_MAP.map(e => ({ seat: e.seat, login: e.login, aliases: e.aliases, status: e.status })) });
   }
   if (p === '/cards/start-after') {   // POST {repo, number, start_after}: owner or a fleet seat, inside 30 days. Wins over the collector field while stored.
     if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });

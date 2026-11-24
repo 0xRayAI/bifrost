@@ -27,6 +27,13 @@ test('the half hour is the only open weekday slot', () => {
   assert.equal(stationHourKey('2026-10-24T13:30:00-05:00'), null);
 });
 
+test('a throw from the station tick is logged', () => {
+  const src = fs.readFileSync(path.join(APP, 'server.mjs'), 'utf8');
+  assert.match(src, /function runStationTick\(\)/);
+  assert.match(src, /station nudge throw/);
+  assert.equal(src.includes('catch { /* the next minute retries */ }'), false);
+});
+
 test('arch1 is included only when that id is in the fleet', () => {
   assert.deepEqual(stationSeats(['forge', 'critic', 'blinky', 'herald']), ['forge', 'critic', 'blinky']);
   assert.deepEqual(stationSeats(IDS), ['forge', 'critic', 'blinky', 'arch1']);

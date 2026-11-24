@@ -20,3 +20,19 @@ A live card with no beat for `NUDGE_L1_S` (default 3600) sends one L1 inbox line
 The station nudge is `nudge:station:<seat>:<Chicago date>`. The hour guard is still weekdays, America/Chicago, 7:30 through 17:30. A later hour the same day updates that row. The sentence is to run station and re-read OP-PROC. Ack only after the re-read. A pulsar line is the station card and is not acked from chat.
 
 A comment is a beat on the card. It does not open a second card. `@arch10x` is the arch1 needle. A bare `@arch1` does not route.
+
+## What wakes a seat
+
+The default filter is actionable. Set `SEAT_WAKE_FILTER` to `all`, `actionable`, or JSON `{mode, seats}`. When the env var is unset, roster `wake_filter` is that same JSON. A line still lands. A skip is reason `filter`.
+
+Someone outside the fleet is reached by an @-mention of their real GitHub login. That mention becomes their inbox line and can wake them.
+
+A fleet seat is woken by a direct handoff packet (`live-inbox <seat> --handoff <to> --pr <owner/repo#n> --kind ready --sha <head>`). An @-mention of the seat id wakes that seat. An @-mention of the seat's bot login lands a line and does not wake it. The filter matches the seat id only. Matching the login or an alias would wake on every mention of a shared bot, which is the flood this filter holds back.
+
+A new head on an open pull does not wake the reviewer by itself. The author owes a `ready` handoff at that head. A GitHub comment does not clear `handoff missing`.
+
+`wake_filter.reviewer_on_new_head` set to `true`, or a per-seat map such as `{"critic": true}`, wakes that seat once per pull head. `SEAT_WAKE_REVIEWER_ON_NEW_HEAD=1` is the same switch. The default is off. Draft and closed pulls stay quiet. The line still passes the wake gate, fleet mode, and the own-actor skip. A push that never emits `pr_commit` on a long-running board is not confirmed, so this switch only fires when that event is stored.
+
+## One login, one seat
+
+`bifrost init --check` fails when one login or alias, compared with no case and no `[bot]` suffix, belongs to two seats. It also fails when the same `@handle` needle is on two seats. The message names the handle and both seats. Startup writes the same warning and still boots. `GET /routing` includes `conflicts`. The first seat in the map keeps the login and the alias. One event id routed to two seats is moved to the later seat. It is not copied.
