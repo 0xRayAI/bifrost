@@ -358,7 +358,10 @@ main { max-width: 1100px; margin: 0 auto; padding: 12px; }
 header .title { animation: rise .6s ease-out both; }
 .title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 #themeToggle { margin-left: auto; flex: none; }
-#mark { width: 112px; height: 44px; flex: none; }
+.brand { display: flex; align-items: center; flex: none; height: 44px; }
+#mark { width: 112px; height: 44px; flex: none; display: block; }
+#fleetLogo { height: 44px; width: auto; max-width: 200px; object-fit: contain; display: block; }
+#mark[hidden], #fleetLogo[hidden] { display: none !important; }
 .pill { display: inline-block; width: 11ch; text-align: center; white-space: nowrap; flex: none; font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--teal); color: var(--pill-fg); background: var(--pill-bg); }
 .pill::before { content: "\25CF  "; color: var(--pill-live); animation: blink 1.6s ease-in-out infinite; }
 .fleet { margin-left: 0; flex: none; text-align: right; white-space: nowrap; font-size: 11px; line-height: 1.5; color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -377,7 +380,7 @@ header .title { animation: rise .6s ease-out both; }
   header .title, .pill::before { animation: none; }
   #mesh { transition: none; }
 }
-header h1 { font-size: 20px; margin: 0; letter-spacing: .04em; }
+header h1 { font-size: 11px; font-weight: 500; letter-spacing: .01em; color: var(--dim); margin: 0; }
 main > header {
   position: sticky;
   top: 0;
@@ -593,7 +596,7 @@ button:hover { border-color: var(--control-hover); }
     #cardGroup:hover { background: var(--log-hover); }
     #cardGroup[aria-pressed="true"] { color: var(--teal); }
 #log { list-style: none; margin: 0; padding: 0; max-height: 16rem; overflow: auto; }
-#log li { display: grid; grid-template-columns: 14ch 7ch 1fr; gap: 8px; padding: 3px 0; border-top: 1px solid var(--hairline); cursor: pointer; }
+#log li { display: grid; grid-template-columns: 18ch 7ch 1fr; gap: 8px; padding: 3px 0; border-top: 1px solid var(--hairline); cursor: pointer; }
 #log li:first-child { border-top: 0; }
 #log li:hover { background: var(--log-hover); }
 #log .when { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; font-family: "JetBrains Mono", ui-monospace, monospace; }
@@ -611,7 +614,7 @@ footer a { color: var(--foot); }
 @media (max-width: 720px) {
   .fleet { flex: 1 1 100%; min-width: 0; white-space: normal; }
   .wave-stats { grid-template-columns: repeat(3, 1fr); }
-  #log li { grid-template-columns: 12ch 1fr; }
+  #log li { grid-template-columns: 18ch 1fr; }
   #log .who { display: none; }
 }
 </style>
@@ -620,8 +623,11 @@ footer a { color: var(--foot); }
 <main>
   <header>
     <div class="title">
-      <canvas id="mark" width="112" height="44" role="img" aria-label="0xRay"></canvas>
-      <h1>🌈 Bifrost</h1>
+      <span class="brand" id="brand">
+        <canvas id="mark" width="112" height="44" role="img" aria-label="0xRay"></canvas>
+        <img id="fleetLogo" alt="" hidden>
+      </span>
+      <h1 class="byline" id="byline">🌈 bifrost by 0xray</h1>
       <span class="pill" id="pill">LIVE</span>
       <span class="spectrum-pill" id="spectrumPill" hidden>Spectrum</span>
       <span class="spectrum-meter" id="spectrumMeter" hidden aria-hidden="true"></span>
@@ -647,13 +653,13 @@ footer a { color: var(--foot); }
     </section>
     <div class="fold-body">
     <div class="lens-head">
-      <span>THE LENS · PING-PONG VOLLEY</span>
-      <span class="legend">pings = handoffs + pushes · circles = seats · squares = rails</span>
+      <span>Work passing between people</span>
+      <span class="legend">a moving dot is work passed along, or a code push · a circle is a person · a square is a connection</span>
     </div>
     <div id="head">&nbsp;</div>
     <div id="headTime">&nbsp;</div>
-    <canvas id="mesh" width="920" height="400" aria-label="Mesh of seats and rails with handoff pings"></canvas>
-    <p class="mesh-legend" id="meshLegend"><span title="index.html drawNode. Hot seat from activeSeats over a handoff or push, or the rewind window. Three strokes. Live duration 2 times FLASH_MS, 5200ms. Letter seats.">Hot ring 5.2s</span><span title="index.html drawNode. A seen seat is live or active, and it is not working. One dim stroke. The name does not roll.">Seen ring</span><span title="index.html draw. A ping whose source is this node. One sine, PULSE_MS 900, across the flight. Flight is 2600ms, up to 7800ms.">Depart pulse</span><span title="index.html drawPing. from equals to. Radius 24 to 46 and alpha 1 to 0 across that same flight.">One-node ring</span></p>
+    <canvas id="mesh" width="920" height="400" aria-label="People and the links between them, with work moving"></canvas>
+    <p class="mesh-legend" id="meshLegend"><span title="This person just got work, or a code push landed. The rings last about 5 seconds.">Just got work</span><span title="This person is here and is not working right now.">Here, idle</span><span title="Work just left this person.">Work leaving</span><span title="This person sent work to themselves.">To themselves</span></p>
     </div>
     <div class="controls mesh-controls" aria-label="Timeline">
       <button id="play" type="button" title="Play / pause the replay (Live plays in real time; click the timeline to replay from there)">&#9654; Play</button>
@@ -778,9 +784,24 @@ footer a { color: var(--foot); }
     imgs[k] = img;
   });
 
-  // 0xRay wordmark from the house recipe cells (never the stamp PNG)
+  // 0xRay wordmark, or a fleet image from setBrand (never the stamp PNG)
   (function drawMark() {
-    var mc = $('mark'), mx = mc.getContext('2d'), cells = L.markCells(), dpr = window.devicePixelRatio || 1;
+    var mc = $('mark');
+    var img = $('fleetLogo');
+    var logo = L.brand && L.brand.logo;
+    var by = $('byline');
+    if (by && L.brand && L.brand.byline) { by.textContent = L.brand.byline; by.hidden = false; }
+    if (logo && img) {
+      img.alt = L.brand.alt || 'Fleet';
+      img.src = logo;
+      img.hidden = false;
+      if (mc) mc.hidden = true;
+      return;
+    }
+    if (img) img.hidden = true;
+    if (!mc) return;
+    mc.hidden = false;
+    var mx = mc.getContext('2d'), cells = L.markCells(), dpr = window.devicePixelRatio || 1;
     mc.width = L.MARK.w * dpr; mc.height = L.MARK.h * dpr; mx.scale(dpr, dpr);
     var ink = [null, cssVar('--mark-a'), cssVar('--mark-b')];
     cells.forEach(function (row, y) {
@@ -1057,7 +1078,7 @@ footer a { color: var(--foot); }
   function wbCt(t) {
     try { var o = { timeZone: 'America/Chicago' }, d = new Date(t).toLocaleDateString('en-US', o) !== new Date().toLocaleDateString('en-US', o);
       return (d ? new Date(t).toLocaleDateString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric' }) + ' ' : '')
-        + new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }) + ' CT'; } catch (e) { return ''; }
+        + new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }) + ' Central'; } catch (e) { return ''; }
   }
   function wbAge(t) { if (!t) return '—'; var m = Math.max(0, Math.round((Date.now() - t) / 60000)); return m < 60 ? m + 'm' : m < 2880 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd'; }
   function wbEl(tag, cls, text) { var el = document.createElement(tag); if (cls) el.className = cls; if (text != null) el.textContent = text; return el; }
@@ -1953,7 +1974,7 @@ footer a { color: var(--foot); }
     li.setAttribute('aria-expanded', open ? 'true' : 'false');
     var when = document.createElement('span');
     when.className = 'when';
-    when.textContent = t === t ? L.fmtCt(t).replace(' CT', '') : (e.t_ct || '');
+    when.textContent = t === t ? L.fmtCt(t).replace(' Central', '') : (e.t_ct || '');
     var who = document.createElement('span');
     who.className = 'who';
     who.textContent = detail ? detail.seat : (L.whoTag ? L.whoTag(e) : (e.from || ''));

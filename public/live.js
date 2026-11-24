@@ -230,6 +230,29 @@
     return out;
   }
 
+  /* A turn is a person starting or finishing. The row says that, not the raw kind. */
+  function turnWord(e) {
+    var blob = String((e && e.label || '') + ' ' + (e && e.tag || '') + ' ' + (e && e.note || ''));
+    if (/\b(end|ended|finish|finished)\b/i.test(blob)) return 'finished';
+    if (/\b(start|started)\b/i.test(blob)) return 'started';
+    return 'working';
+  }
+  function kindWord(e) {
+    var kind = e && typeof e.kind === 'string' ? e.kind : '';
+    if (kind === 'seat_turn') return turnWord(e);
+    var word = own(KIND_WORD, kind);
+    if (word) return word;
+    return kind ? kind.replace(/_/g, ' ') : '';
+  }
+  /* A written note stays. A raw kind, or a snake_case token, becomes a plain word. */
+  function showLabel(e) {
+    var kind = e && typeof e.kind === 'string' ? e.kind : '';
+    if (kind === 'seat_turn') return turnWord(e);
+    var raw = cleanLabel(e && e.label || '');
+    if (raw && raw !== kind && !/^[a-z0-9_]+$/.test(raw)) return raw;
+    return kindWord(e) || raw;
+  }
+
   var CI_KIND = { ci_pass: 1, ci_fail: 1, check_run: 1, check_suite: 1, workflow_run: 1, commit_status: 1 };
   /* CI who is the credit (forge, Blaze). from stays the GitHub/CI source for the mesh. */
   function whoTag(e) {
@@ -245,18 +268,18 @@
     if (!e) return null;
     if (typeof e.kind !== 'string') e = Object.assign({}, e, { kind: '' });
     var prompt = promptView(e);
-    var note = prompt && prompt.line ? prompt.line : (typeof e.note === 'string' && e.note.trim() ? e.note.trim() : cleanLabel(e.label || ''));
+    var note = prompt && prompt.line ? prompt.line : (typeof e.note === 'string' && e.note.trim() ? e.note.trim() : showLabel(e));
     var repo = e.repo ? String(e.repo) : '';
     var num = e.number == null || e.number === '' ? NaN : Number(e.number);
     var card = repo && num === num ? repo + '#' + num : '';
     var href = /^https:\/\//.test(e.source || '') ? e.source : (/^https:\/\//.test(e.url || '') ? e.url : '');
     if (!href && card) href = 'https://github.com/' + repo + '/' + (/issue/.test(e.kind) ? 'issues' : 'pull') + '/' + num;
-    return { seat: whoTag(e), card: card, href: href, note: note, label: cleanLabel(e.label || e.kind || '') };
+    return { seat: whoTag(e), card: card, href: href, note: note, label: showLabel(e) };
   }
 
   function headline(e) {
     var repo = (e.repo || '').split('/').pop();
-    var head = repo + (e.number == null ? '' : ' #' + e.number) + ' \u00b7 ' + (KIND_WORD[e.kind] || e.kind);
+    var head = repo + (e.number == null ? '' : ' #' + e.number) + ' \u00b7 ' + kindWord(e);
     return head.replace(/^[ \u00b7#]+|[ \u00b7#]+$/g, '');
   }
 
@@ -365,12 +388,12 @@
 
   var CT = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Chicago', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    hour: 'numeric', minute: '2-digit', hour12: true
   }) : null;
 
   function fmtCt(ms) {
     if (!CT) return new Date(ms).toISOString();
-    return CT.format(new Date(ms)).replace(',', '') + ' CT';
+    return CT.format(new Date(ms)) + ' Central';
   }
 
   function ago(ms) {
@@ -506,6 +529,16 @@
     }, function () { return fallback(1); });
   }
 
+  /* Empty logo keeps the 0xRay wordmark. A fleet calls setBrand({ logo, alt, byline }). */
+  var brand = { logo: '', alt: 'Fleet', byline: '' };
+  function setBrand(opts) {
+    opts = opts || {};
+    if (opts.logo != null) brand.logo = String(opts.logo);
+    if (opts.alt != null) brand.alt = String(opts.alt);
+    if (opts.byline != null) brand.byline = String(opts.byline);
+    return brand;
+  }
+
   root.LiveMesh = {
     SOURCES: SOURCES, POLL_MS: POLL_MS, PING_MS: PING_MS, AGENTS: AGENTS, SEAT_NAMES: SEAT_NAMES, COLOR: COLOR,
     LABEL: LABEL, SUB: SUB, SQUARE: SQUARE, HUB: HUB, SATS: SATS, EDGES: EDGES, KIND_WORD: KIND_WORD,
@@ -514,7 +547,7 @@
     eventsUpTo: eventsUpTo, pingsAt: pingsAt, hotNodes: hotNodes, applyFeed: applyFeed,
     bounds: bounds, fmtCt: fmtCt, ago: ago, feedUrl: feedUrl, fetchFeed: fetchFeed, shellNotice: shellNotice, rosterEntries: rosterEntries,
     own: own, botImage: botImage, badgeLetter: badgeLetter, bob: bob, pulse: pulse, entry: entry,
-    ENTRY_MS: ENTRY_MS, PULSE_MS: PULSE_MS, MARK: MARK, markCells: markCells,
+    ENTRY_MS: ENTRY_MS, PULSE_MS: PULSE_MS, MARK: MARK, markCells: markCells, brand: brand, setBrand: setBrand,
     isPlaying: isPlaying, sliderAction: sliderAction, edgeTraffic: edgeTraffic, orbitStep: orbitStep,
     spectrumEnabled: spectrumEnabled, spectrumShows: spectrumShows, spectrumMeter: spectrumMeter,
     spectrumTrail: spectrumTrail, packetCore: packetCore, aspectFit: aspectFit,
