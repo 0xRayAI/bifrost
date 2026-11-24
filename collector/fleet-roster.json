@@ -27,6 +27,12 @@
     "magnet",
     "sound"
   ],
+  "station": [
+    "forge",
+    "critic",
+    "blinky",
+    "arch1"
+  ],
   "roles": {
     "blinky": "chief of staff",
     "critic": "reviewer",

@@ -18,3 +18,11 @@ sidebar_label: Health
 `stalled` is a separate flag. It follows the accepted clock when that clock is newer than the collector child start, and the child start otherwise. The window is `COLLECTOR_WATCH_S` (default 45 seconds) times `COLLECTOR_WATCHDOG_N` (default 6, 270 seconds). The collector writes a beat at the start of a pass and again at the end. A fat beat moves the accepted clock before the 2 MiB return, so that write is not stalled. Raw mtime of the event file or the beat is only the empty-board guard: an empty card list does not replace a live board while `stalled` is true or that file age is past the same window.
 
 `board` on the health body is `building`, `empty`, or `live`. `origin` is the pinned public origin, or null. The body carries a repo count and times. `unreadable_repos` lists the names the collector could not read. Those names are real when the site is public. They are masked as `private repo #n` only when the site is gated. The committed `collector/site.json` is public. `LIVE_PUBLIC` wins over that file.
+
+`seats` is the fleet's seat ids and nothing else. The order is `collector/fleet-roster.json` `seats`, or `LIVE_SEAT_IDS` when that variable is set. Each entry is a seat id string. The list has no keys, no GitHub logins, and no webhook URLs. A setup check does not need the mesh password:
+
+```bash
+curl -fsS "$BOARD/healthz" | jq -c .seats
+```
+
+Compare that array to the fleet. `arch1_launch` and `arch1_inbox` are on the body only when `arch1` is one of those ids.

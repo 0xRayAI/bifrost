@@ -43,41 +43,18 @@
       });
     });
   };
-  // Bots (the "N seen" count; the feed's fleet state marks seats seen from file mtimes too).
-  // Coord uses the upstream 'blinky' key. QA = QaOne + QA two + QA (one seat, one stream).
-  L.AGENTS.splice(0, L.AGENTS.length, ['Builder', 'builder'], ['Builder-cloud', 'cloud builder'], ['Reviewer', 'gate'], ['Tester', 'lab tester'],
-    ['QA', 'lab testers'], ['Operator', 'infra'], ['blinky', 'Coordinator'], ['CloudAgents', 'cloud agents'], ['Assistant', 'emitter']);
-  // Cloud agents is a header seat (SEEN/IDLE) but not one of the bots counted in the seen line.
-  L.SEAT_NAMES.splice(0, L.SEAT_NAMES.length, 'Builder', 'Builder-cloud', 'Reviewer', 'Tester', 'QA', 'Operator', 'blinky');
-  // Nodes (920 x 400 canvas, hub at 500,200). One product node (product + dev / labtest / prod instances; the
-  // instance is a tag on the event label). 'mymuse.house' / 'blinky' / 'X' are upstream's fixed keys,
-  // shown as the product / Coord / Others.
-  // Lead = lead-login and lead-alt (his renamed login): one node. CI is folded into GitHub.
-  reset(L.SATS, { Builder: [90, 50], 'Builder-cloud': [190, 125], Reviewer: [280, 50], X: [470, 50], GitHub: [680, 55], Railway: [850, 55],
-    Lead: [110, 200], Operator: [300, 200], blinky: [690, 200], 'mymuse.house': [850, 200],
-    CloudAgents: [150, 330], Tester: [400, 330], QA: [640, 330], Assistant: [860, 330] });
-  reset(L.COLOR, { Builder: [110, 170, 255], 'Builder-cloud': [150, 200, 255], Reviewer: [255, 150, 90], Tester: [240, 120, 190], QA: [140, 230, 200],
-    Operator: [88, 210, 180], CloudAgents: [130, 190, 255], Lead: [255, 120, 100], X: [150, 160, 180],
-    GitHub: [200, 210, 230], Railway: [170, 130, 255], Assistant: [116, 170, 156],
-    'mymuse.house': [255, 200, 90], blinky: [88, 210, 180] });
-  reset(L.LABEL, { CloudAgents: 'Cloud agents', Builder: 'Builder', 'Builder-cloud': 'Builder-cloud', Reviewer: 'Reviewer', Tester: 'Tester', QA: 'QA', Operator: 'Operator',
-    Lead: 'Lead', X: 'Others', GitHub: 'GitHub', Railway: 'Railway',
-    'mymuse.house': 'Product', blinky: 'Coord', Assistant: 'Assistant / emitter' });
-  reset(L.SUB, { CloudAgents: 'cursor agents', Builder: 'builder', 'Builder-cloud': 'builder (cloud)', Reviewer: 'gate', Tester: 'lab tester', QA: 'qa-one · qa two',
-    Operator: 'infra', Lead: 'Architect', X: 'other actors',
-    GitHub: 'PRs · Issues', Railway: 'deploys', 'mymuse.house': 'dev · labtest · prod', blinky: 'Coordinator', Assistant: 'MCP tool calls' });
+  // Chips and people nodes wait for the fleet spec. Rails keep the hub drawable before it arrives.
+  L.AGENTS.splice(0, L.AGENTS.length);
+  L.SEAT_NAMES.splice(0, L.SEAT_NAMES.length);
+  reset(L.SATS, { GitHub: [460, 200], Railway: [460, 340], CloudAgents: [160, 300], Assistant: [760, 300] });
+  reset(L.COLOR, { GitHub: [200, 210, 230], Railway: [170, 130, 255], CloudAgents: [130, 190, 255], Assistant: [116, 170, 156] });
+  reset(L.LABEL, { GitHub: 'GitHub', Railway: 'Railway', CloudAgents: 'Cloud agents', Assistant: 'Assistant' });
+  reset(L.SUB, { GitHub: 'PRs · Issues', Railway: 'deploys', CloudAgents: 'cursor agents', Assistant: 'MCP calls' });
   reset(L.GLYPH, {});
   reset(L.SQUARE, { GitHub: 1, Railway: 1 });
-  L.EDGES.splice(0, L.EDGES.length, ['Builder', 'GitHub'], ['Builder-cloud', 'GitHub'], ['Lead', 'GitHub'],
-    ['Reviewer', 'GitHub'], ['Tester', 'GitHub'], ['X', 'GitHub'], ['Operator', 'Railway'], ['CloudAgents', 'GitHub'], ['Operator', 'CloudAgents'], ['Lead', 'Operator'],
-    ['GitHub', 'Railway'], ['Railway', 'mymuse.house'], ['Tester', 'mymuse.house'], ['QA', 'mymuse.house'],
-    ['blinky', 'mymuse.house'], ['Assistant', 'mymuse.house'], ['Operator', 'blinky'], ['Operator', 'GitHub']);
-  // Avatars: avatars/<file>.png when present; a missing file falls back to the normal drawing (onerror).
-  // builder-app[bot] -> builder, reviewer-app(/[bot]) -> reviewer, ops-app[bot] -> operator, Tester app -> tester,
-  // The product node -> live (mailbox mark). lead-login and lead-alt (Lead's renamed login) -> the Lead node.
-  // lead-login (Lead, the Architect) uses lead.png; the merged QA seat uses qa.
-  // The kit ships no avatar files, so it maps none (no /avatars/*.png 404s); a fleet's overlay (site-config.js) sets
-  // L.setAvatars({node: file}) for the images it ships in avatars/. Unmapped nodes use the drawn fallback.
+  L.EDGES.splice(0, L.EDGES.length, ['Railway', 'GitHub'], ['CloudAgents', 'GitHub'], ['Assistant', 'GitHub']);
+  // Avatars: site-config maps a seat to avatars/<file>.png only when this deploy configured a directory.
+  // A missing file falls back to the letter badge. Unmapped nodes are not requested.
   L.AVATAR = {};
   L.setAvatars = function (m) {
     L.AVATAR = m || {};
@@ -99,16 +76,21 @@
   var MAX = Math.max(100, Number(q.get('n')) || 3000);
   var KINDS = (q.get('kinds') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
   // Every feed from/to maps onto a drawn node key (L.SATS). Feed names -> node keys; anything else -> fallback.
-  var NODE_KEY = { Blaze: 'Lead', CI: 'GitHub', forge: 'GitHub', Others: 'X', Coord: 'blinky', reviewer: 'Reviewer',
-    labtest: 'mymuse.house',
-    'QA': 'QA', QaOne: 'QA', QaTwo: 'QA', 'QA two': 'QA',
-    'lead-alt': 'Lead', 'lead-login': 'Lead', 'Cloud agents': 'CloudAgents', cursoragent: 'CloudAgents' };
-  L.NODE_KEY = NODE_KEY;   // a fleet overlay may add or remap feed names
-  L.FROM_FALLBACK = 'X';   // node for an unmapped sender ('Others'); an overlay without X points it elsewhere
+  var NODE_KEY = { CI: 'GitHub', 'Cloud agents': 'CloudAgents', cursoragent: 'CloudAgents' };
+  L.NODE_KEY = NODE_KEY;   // site-config adds this fleet's seats and aliases
+  L.FROM_FALLBACK = 'GitHub';
+  L.SEAT_ALIAS = {};
+  L.seatNames = function (key) {
+    var names = [key, String(key || '').toLowerCase()];
+    var alias = L.SEAT_ALIAS || {};
+    Object.keys(alias).forEach(function (from) {
+      var to = alias[from];
+      if (String(to) === String(key) || String(to).toLowerCase() === String(key || '').toLowerCase()) names.push(from);
+    });
+    return names;
+  };
   function nodeKey(v, fallback) {
-    if (/^(lead-alt|lead-login)$/i.test(String(v))) v = 'Lead';   // any alias of Lead's logins
     var k = Object.prototype.hasOwnProperty.call(NODE_KEY, v) ? NODE_KEY[v] : v;
-    if (!Object.prototype.hasOwnProperty.call(L.SATS, k) && /(^|\.)live\.ai$/.test(String(k))) k = 'mymuse.house';
     return Object.prototype.hasOwnProperty.call(L.SATS, k) ? k : fallback;
   }
   // Hop list (feed names) -> drawn node keys; a hop that cannot be drawn is skipped, never crashes the page.
@@ -133,7 +115,7 @@
   L.applyFeed = function (state, feed, nowMs) {
     // the feed header names the product node, its instance hosts and services (feed/site.json); they all draw as
     // the one product node, so the kit page carries no install's names
-    if (feed && Array.isArray(feed.product_nodes)) feed.product_nodes.forEach(function (n) { if (typeof n === 'string' && n && !(n in L.SATS)) NODE_KEY[n] = 'mymuse.house'; });
+    if (feed && Array.isArray(feed.product_nodes) && L.PRODUCT_NODE) feed.product_nodes.forEach(function (n) { if (typeof n === 'string' && n && !(n in L.SATS)) NODE_KEY[n] = L.PRODUCT_NODE; });
     if (feed && Array.isArray(feed.events)) {
       window.LIVE_FEED_TOTAL = typeof feed.event_count === 'number' ? feed.event_count : feed.events.length;
       var ev = feed.events;
@@ -141,7 +123,7 @@
       ev = ev.slice().sort(function (a, b) { return Date.parse(a.t_ct) - Date.parse(b.t_ct); }).slice(-MAX);
       ev = ev.map(function (e) {
         var f = nodeKey(e.from, L.FROM_FALLBACK), t = nodeKey(e.to, 'GitHub');
-        if (f === t && t === 'mymuse.house') f = 'Railway';   // no product -> product self-hop
+        if (L.PRODUCT_NODE && f === t && t === L.PRODUCT_NODE) f = 'Railway';
         return Object.assign({}, e, { from: f, to: t, hops: hopKeys(e.hops) });
       });
       if (feed.fleet && typeof feed.fleet === 'object') window.LIVE_FLEET = feed.fleet;
@@ -172,7 +154,7 @@
   // Board bucket for a card under its seat. Parked stays visible (not folded into done).
   // The function is assigned after seatView so a parked card is its own bucket.
   // Seat groups for the board: each card under its seat (next owner, else owner); a card in review is ALSO waiting
-  // on the review seat (L.REVIEW_SEAT, e.g. critic), so the reviewer's group shows its queue, not only its done cards.
+  // on the review seat (L.REVIEW_SEAT, from the fleet spec), so the reviewer's group shows its queue, not only its done cards.
   L.REVIEW_SEAT = null;
   L.boardGroups = function (cards, seatOf) {
     var by = {}, order = [];
@@ -197,7 +179,7 @@
   L.meshWorking = function (fleet, key) {
     if (key === 'CloudAgents') return L.cloudNode(fleet).lit;
     if (!fleet) return false;
-    var names = key === 'blinky' ? ['Coord', 'coord', 'blinky'] : [key, String(key || '').toLowerCase()];
+    var names = L.seatNames ? L.seatNames(key) : [key, String(key || '').toLowerCase()];
     var seats = fleet.seats || {}, working = fleet.working || {}, i, name, keys;
     for (i = 0; i < names.length; i++) {
       name = names[i];
@@ -245,8 +227,7 @@
   };
   L.seatWorkOn = function (fleet, seat) {
     if (!fleet || !seat) return '';
-    var names = [seat, String(seat).toLowerCase()];
-    if (seat === 'blinky' || seat === 'Coord' || String(seat).toLowerCase() === 'blinky') names.push('blinky', 'Coord');
+    var names = L.seatNames ? L.seatNames(seat) : [seat, String(seat).toLowerCase()];
     var working = fleet.working || {};
     var seats = fleet.seats || {};
     var mark = '';
@@ -302,8 +283,8 @@
   };
   // Outside / CLI seats are rarely working, so cardInWork does not refresh their stall.
   // Freshness is the newest comment, push, or close by that seat on this card.
-  L.OUTSIDE_SEATS = { arch1: 1 };
-  L.OUTSIDE_LOGIN = { arch1: 'arch1', arch10x: 'arch1', 'arch10x[bot]': 'arch1', 'git:arch1': 'arch1' };
+  L.OUTSIDE_SEATS = {};
+  L.OUTSIDE_LOGIN = {};
   L.STALL_MS = 60 * 60 * 1000;
   L.STALL_KIND = { comment: 1, pr_comment: 1, issue_comment: 1, review_comment: 1, pr_review: 1, review: 1,
     pr_commit: 1, pr_update: 1, pr_force_push: 1, push: 1, issue_close: 1, pr_close: 1, merged: 1 };

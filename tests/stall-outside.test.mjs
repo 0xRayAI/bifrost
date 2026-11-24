@@ -17,8 +17,16 @@ function loadLive() {
   return L;
 }
 
-test('an Arch1 stall card follows Arch1 comment, push, and close, not a prompt', () => {
+test('outside seats start empty until a fleet spec names them', () => {
   const L = loadLive();
+  assert.deepEqual(L.OUTSIDE_SEATS, {});
+  assert.deepEqual(L.OUTSIDE_LOGIN, {});
+});
+
+test('an outside seat stall follows that seat\'s comment, push, and close, not a prompt', () => {
+  const L = loadLive();
+  L.OUTSIDE_SEATS = { arch1: 1 };
+  L.OUTSIDE_LOGIN = { arch1: 'arch1', arch10x: 'arch1', 'arch10x[bot]': 'arch1', 'git:arch1': 'arch1' };
   const now = Date.parse('2026-10-28T16:00:00Z');
   const card = {
     key: '0xrayai/xray#661', repo: '0xRayAI/xray', number: 661, owner: 'arch1',

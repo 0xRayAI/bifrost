@@ -5,14 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const seats = ['blinky', 'critic', 'forge', 'arch1'];
 
-test('the fleet overlay names the seats and ships their avatars', () => {
+test('the page overlay does not name a team, and portraits are not in the public tree', () => {
   const text = fs.readFileSync(path.join(root, 'public', 'site-config.js'), 'utf8');
-  assert.ok(!text.startsWith('/* Fleet overlay hook'), 'the kit hook is not the served overlay');
-  for (const seat of seats) assert.match(text, new RegExp(`\\b${seat}\\b`));
-  for (const name of [...seats, 'blaze']) {
-    const file = path.join(root, 'public', 'avatars', `${name}.png`);
-    assert.ok(fs.statSync(file).size > 100, name);
-  }
+  assert.match(text, /window\.FLEET_SPEC/);
+  assert.doesNotMatch(text, /\b(blinky|critic|forge|arch1|herald|nibbler|blaze)\b/i);
+  const shipped = fs.readdirSync(path.join(root, 'public', 'avatars')).filter(name => name.endsWith('.png'));
+  assert.deepEqual(shipped, []);
+  const kept = fs.readdirSync(path.join(root, 'config', 'avatars')).filter(name => name.endsWith('.png')).sort();
+  assert.deepEqual(kept, ['arch1.png', 'blaze.png', 'blinky.png', 'critic.png', 'forge.png', 'herald.png', 'near.png']);
 });

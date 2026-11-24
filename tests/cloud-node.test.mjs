@@ -56,7 +56,19 @@ function loadMesh() {
     BOT_IMAGES: [], KIND_WORD: {}, NODE_KEY: {},
     applyFeed(state, feed) { return { state: { events: feed.events || [] }, feed, added: [] }; },
   };
-  const window = { LiveMesh: L };
+  const window = {
+    LiveMesh: L,
+    FLEET_SPEC: {
+      name: 'Bifrost',
+      title: 'Bifrost',
+      board_names: ['Bifrost', 'burst-live'],
+      seats: [
+        { id: 'forge', role: 'eng primary' },
+        { id: 'critic', role: 'reviewer' },
+      ],
+      layout: {},
+    },
+  };
   new Function('window', 'location', fs.readFileSync(path.join(APP, 'public', 'live-config.js'), 'utf8'))(window, { search: '' });
   new Function('window', fs.readFileSync(path.join(APP, 'public', 'site-config.js'), 'utf8'))(window);
   return L;
