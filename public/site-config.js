@@ -116,5 +116,4 @@
     }
     return kitApply(state, feed, nowMs);
   };
-  L.GLYPH = Object.assign(L.GLYPH || {}, { nibbler: '\uD83E\uDEB1', mill: '\u2699\uFE0F' });
 })(window.LiveMesh);
