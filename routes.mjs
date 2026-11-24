@@ -44,6 +44,41 @@ export function readRoutingMap(dir) {
   try { return routingMap(JSON.parse(fs.readFileSync(path.join(dir, 'inbox-roles.json'), 'utf8'))); } catch { return []; }
 }
 
+function claimKey(value) {
+  let text = String(value || '').trim();
+  if (text.startsWith('@')) text = text.slice(1);
+  text = text.replace(/\[bot\]$/i, '');
+  return text ? text.toLowerCase() : '';
+}
+
+// One login, alias, or @handle claimed by two seats. Seat order is map order: the first seat wins at runtime.
+export function routingConflicts(roles) {
+  const owners = new Map();
+  const add = (key, seat) => {
+    if (!key) return;
+    const who = String(seat);
+    if (!owners.has(key)) owners.set(key, []);
+    const list = owners.get(key);
+    if (!list.includes(who)) list.push(who);
+  };
+  for (const [seat, entry] of Object.entries(roles?.routing || {})) {
+    if (!entry || typeof entry !== 'object') continue;
+    add(claimKey(entry.login), seat);
+    for (const alias of Array.isArray(entry.aliases) ? entry.aliases : []) add(claimKey(alias), seat);
+  }
+  for (const [seat, rule] of Object.entries(roles?.extra_seats || {})) {
+    if (!rule || typeof rule !== 'object') continue;
+    for (const needle of Array.isArray(rule.needles) ? rule.needles : []) {
+      if (String(needle).startsWith('@')) add(claimKey(needle), seat);
+    }
+  }
+  return [...owners.entries()].filter(([, seats]) => seats.length > 1).map(([handle, seats]) => ({ handle, seats }));
+}
+
+export function routingConflictsFromDir(dir) {
+  try { return routingConflicts(JSON.parse(fs.readFileSync(path.join(dir, 'inbox-roles.json'), 'utf8'))); } catch { return []; }
+}
+
 // Login resolver: GET <api>/users/<login> with the existing read token. Cached (ttlMs), rate-limit safe: a 403/429 with
 // no remaining quota pauses every lookup until the reset time and answers from cache ('unverified' when there is none).
 // -> 'ok' (exists) | 'missing' (404: refuse the entry) | 'unverified' (no token, network, rate limit).

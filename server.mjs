@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
-import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins } from './routes.mjs';
+import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins, routingConflictsFromDir } from './routes.mjs';
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
@@ -1221,6 +1221,8 @@ if (!ROUTING.ok) console.log('ROUTING: FAIL ' + (ROUTING.error || '') + (ROUTING
 // entry is served as refused at /routing, ROUTING.ok goes false, and the CoS gets a board nudge. Unverified (no token,
 // rate limit, network) is flagged, never refused.
 const ROUTING_DIR = process.env.BIFROST_ROUTING_DIR || path.join(COLLECTOR_DIR_EARLY(), 'routing');
+ROUTING.conflicts = routingConflictsFromDir(ROUTING_DIR);
+if (ROUTING.conflicts.length) process.stderr.write('ROUTING: WARN one login or alias claimed by two seats: ' + ROUTING.conflicts.map(c => c.handle + ' (' + c.seats.join(', ') + ')').join('; ') + '\n');
 const ROUTING_BASE_OK = ROUTING.ok;
 let ROUTING_MAP = readRoutingMap(ROUTING_DIR).map(e => ({ ...e, status: e.login ? 'unverified' : 'no_login' }));
 const loginResolver = createLoginResolver({ api: GITHUB_API, token: process.env.GITHUB_READ_TOKEN || '',
@@ -4537,7 +4539,7 @@ async function handle(req, res) {
     if (m !== 'GET') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET' });
     let who = null; try { who = await seatOf(req); } catch { /* fall through to session / public */ }
     if (!who && !PUBLIC && !validSession(req)) return json(req, res, 401, { error: 'unauthorized' });
-    return json(req, res, 200, { ok: ROUTING.ok, seats: ROUTING_MAP.map(e => ({ seat: e.seat, login: e.login, aliases: e.aliases, status: e.status })) });
+    return json(req, res, 200, { ok: ROUTING.ok, conflicts: ROUTING.conflicts || [], seats: ROUTING_MAP.map(e => ({ seat: e.seat, login: e.login, aliases: e.aliases, status: e.status })) });
   }
   if (p === '/cards/start-after') {   // POST {repo, number, start_after}: owner or a fleet seat, inside 30 days. Wins over the collector field while stored.
     if (m !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
