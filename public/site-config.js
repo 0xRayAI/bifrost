@@ -78,4 +78,6 @@
   L.setAvatars({ blinky: 'blinky', critic: 'critic', forge: 'forge', near: 'near', herald: 'herald', arch1: 'arch1', Blaze: 'blaze' });
   L.GLYPH = Object.assign(L.GLYPH || {}, { nibbler: '\uD83E\uDEB1', mill: '\u2699\uFE0F' });
   L.SITE_FOOT = 'Bifrost · built in public';
+  // A file in public/ replaces the 0xRay wordmark. The small credit stays.
+  // L.setBrand({ logo: 'fleet-logo.png', alt: 'Fleet name' });
 })(window.LiveMesh);

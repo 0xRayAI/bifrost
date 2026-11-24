@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The board says what the picture means. The clock says Central time. A fleet image can replace the 0xRay mark. The header credit is small: bifrost by 0xray.
 - A line nudge keeps the original `t_ct` and writes the nudge time on `nudged_at`. A head change emits `pr_commit` when the author has no GitHub user, and when a newer update is the first time a stored pull shows a head. A needle hit and a review request land with `ask: true` and can wake. A new head still does not. Lines already stored are not re-filtered. #121 #122 #123
 - A throw from the station tick is logged. The next minute still runs.
 - One login, alias, or `@handle` claimed by two seats is a startup warning and a `conflicts` array on `GET /routing`. The process still boots. The first seat in the map keeps the claim. `wake_filter.reviewer_on_new_head` wakes a reviewer once per pull head and stays off.
