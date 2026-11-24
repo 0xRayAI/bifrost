@@ -36,12 +36,9 @@ test('a turn and the clock use plain words', () => {
 
 test('the picture uses plain words and the header mark can be a fleet image', () => {
   const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8');
-  assert.match(html, /Work passing between people/);
-  assert.match(html, /a circle is a person/);
-  assert.match(html, />Just got work</);
-  assert.match(html, />Here, idle</);
-  assert.match(html, />Work leaving</);
-  assert.match(html, />To themselves</);
+  assert.match(html, /dots = work · circles = people · squares = links/);
+  assert.doesNotMatch(html, /mesh-legend/);
+  assert.doesNotMatch(html, /Just got work/);
   assert.match(html, /id="fleetLogo"/);
   assert.match(html, /L\.brand && L\.brand\.logo/);
   assert.match(html, /🌈 bifrost by 0xray/);

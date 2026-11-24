@@ -443,8 +443,6 @@ canvas { display: block; width: 100%; height: auto; }
 #statsFold { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 8px; padding: 0 8px; background: transparent; }
 #statsFold:not(.collapsed) { background: var(--stat-bg); }
 #kanban { margin-top: 12px; }
-.mesh-legend { color: var(--dim); font-size: 11px; margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.mesh-legend span { border-bottom: 1px dotted var(--dim); cursor: help; }
 .spectrum-pill { display: inline-block; flex: none; font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 3px 8px; border-radius: 999px;
   color: var(--on); border: 1px solid var(--spectrum-edge); background: var(--spectrum-bg); }
 .spectrum-meter { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; flex: none; }
@@ -653,13 +651,11 @@ footer a { color: var(--foot); }
     </section>
     <div class="fold-body">
     <div class="lens-head">
-      <span>Work passing between people</span>
-      <span class="legend">a moving dot is work passed along, or a code push · a circle is a person · a square is a connection</span>
+      <span class="legend">dots = work · circles = people · squares = links</span>
     </div>
     <div id="head">&nbsp;</div>
     <div id="headTime">&nbsp;</div>
     <canvas id="mesh" width="920" height="400" aria-label="People and the links between them, with work moving"></canvas>
-    <p class="mesh-legend" id="meshLegend"><span title="This person just got work, or a code push landed. The rings last about 5 seconds.">Just got work</span><span title="This person is here and is not working right now.">Here, idle</span><span title="Work just left this person.">Work leaving</span><span title="This person sent work to themselves.">To themselves</span></p>
     </div>
     <div class="controls mesh-controls" aria-label="Timeline">
       <button id="play" type="button" title="Play / pause the replay (Live plays in real time; click the timeline to replay from there)">&#9654; Play</button>
