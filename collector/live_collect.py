@@ -1008,7 +1008,7 @@ class RepoCollector:
 
     def pr_commit_event(self, n, sha, date, msg, login):
         m = brand((msg or "").splitlines()[0] if msg else "")[:72]
-        self.put(f"{self.repo}#{n}:commit:{sha}", date, node(login), "GitHub", "pr_commit",
+        self.put(f"{self.repo}#{n}:commit:{sha}", date, shown_from(login), "GitHub", "pr_commit",
                  f"{self.short} #{n} push {sha[:7]} · {m}", f"https://github.com/{self.repo}/pull/{n}/commits/{sha}",
                  n, sha=sha, message=m, author=login, seat_trailer=seat_trailer(msg))
 
@@ -1225,7 +1225,12 @@ class RepoCollector:
                 self.put(f"{self.repo}#{n}:merged", p["merged_at"], node(merger or login), "GitHub", "merged",
                          f"merged {self.short} #{n} → {p['base']['ref']}", url, n, **extra)
                 self._put_parent_door(c, n, p.get("merged_at"), url, p.get("body"))
-            if prev_head and head and prev_head != head:
+            # A stored head that moved, or a head that shows up on a newer update after a boot
+            # that never stored the sha. The first sighting of a pull is the open card only.
+            stored_at = prev.get("updated_at")
+            head_moved = bool(prev_head) and bool(head) and prev_head != head
+            head_landed = bool(head) and not prev_head and bool(stored_at) and gh_after(p.get("updated_at"), stored_at)
+            if head_moved or head_landed:
                 self.pr_commit_event(n, head, p["updated_at"], p.get("title") or "", login)
                 self.st.setdefault("enrich", {})[str(n)] = True
             if author_seat or (self.st["bf"].get("prs:done") and prev.get("updated_at") != p["updated_at"]):

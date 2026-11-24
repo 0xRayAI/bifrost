@@ -33,6 +33,12 @@ A new head on an open pull does not wake the reviewer by itself. The author owes
 
 `wake_filter.reviewer_on_new_head` set to `true`, or a per-seat map such as `{"critic": true}`, wakes that seat once per pull head. `SEAT_WAKE_REVIEWER_ON_NEW_HEAD=1` is the same switch. The default is off. Draft and closed pulls stay quiet. The line still passes the wake gate, fleet mode, and the own-actor skip. A push that never emits `pr_commit` on a long-running board is not confirmed, so this switch only fires when that event is stored.
 
+A nudge writes `nudge_level` and `nudged_at`. It does not change `t_ct`. The line keeps the time it arrived. The reminder is the level and `nudged_at`.
+
+A routed ask is a line with `ask: true`. A needle hit sets `routed_by` to `needle`. A review request sets `routed_by` to `kind`. That flag wakes the seat. The wake does not look for `@seat` in the title. `wake_filter.wake_on_ask` set to `false`, or `SEAT_WAKE_ON_ASK=0`, turns it off. A per-seat map such as `{"critic": false}` turns it off for that seat. The default is on. A new head still does not wake by itself.
+
+A line already stored is not re-read when this config changes. The body is not on the line. The filter applies to new lines only.
+
 ## One login, one seat
 
 `bifrost init --check` fails when one login or alias, compared with no case and no `[bot]` suffix, belongs to two seats. It also fails when the same `@handle` needle is on two seats. The message names the handle and both seats. Startup writes the same warning and still boots. `GET /routing` includes `conflicts`. The first seat in the map keeps the login and the alias. One event id routed to two seats is moved to the later seat. It is not copied.

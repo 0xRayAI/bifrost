@@ -25,6 +25,24 @@ function reviewerShape(env, parsed) {
   return { reviewerOnNewHead: false, reviewerSeats: null };
 }
 
+// Default on. A routed ask (needle or review request) wakes. A new head does not.
+// wake_on_ask false, or SEAT_WAKE_ON_ASK=0, turns it off. A per-seat false opts that seat out.
+function askShape(env, parsed) {
+  const raw = env.SEAT_WAKE_ON_ASK == null ? '' : String(env.SEAT_WAKE_ON_ASK).trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off') return { askOn: false, askSeats: null };
+  const flag = parsed && Object.prototype.hasOwnProperty.call(parsed, 'wake_on_ask') ? parsed.wake_on_ask : undefined;
+  if (flag === false) return { askOn: false, askSeats: null };
+  if (flag && typeof flag === 'object' && !Array.isArray(flag)) return { askOn: true, askSeats: flag };
+  return { askOn: true, askSeats: null };
+}
+
+function askWake(config, seat) {
+  if (!config || config.askOn === false) return false;
+  const per = config.askSeats;
+  if (per && typeof per === 'object' && Object.prototype.hasOwnProperty.call(per, seat)) return per[seat] === true;
+  return true;
+}
+
 export function readWakeFilter(env = {}, roster = null) {
   const raw = env.SEAT_WAKE_FILTER == null ? '' : String(env.SEAT_WAKE_FILTER).trim();
   let parsed = null;
@@ -33,10 +51,11 @@ export function readWakeFilter(env = {}, roster = null) {
   }
   if (!parsed && roster && typeof roster.wake_filter === 'object') parsed = roster.wake_filter;
   const reviewer = reviewerShape(env, parsed);
-  if (raw === 'all' || raw === 'off') return { mode: 'all', seats: {}, ...reviewer };
+  const ask = askShape(env, parsed);
+  if (raw === 'all' || raw === 'off') return { mode: 'all', seats: {}, ...reviewer, ...ask };
   const seats = parsed && parsed.seats && typeof parsed.seats === 'object' ? parsed.seats : {};
   const mode = parsed && parsed.mode === 'all' ? 'all' : 'actionable';
-  return { mode, seats, ...reviewer };
+  return { mode, seats, ...reviewer, ...ask };
 }
 
 export function filterMode(config, seat) {
@@ -674,6 +693,7 @@ export function allowWake(config, seat, line, ctx) {
     if (!to || to === who) return { allow: true };
   }
   if (ownerPrompt(line) || mentioned(line, who)) return { allow: true };
+  if (line && line.ask === true && askWake(config, who)) return { allow: true };
   if (REVIEW.has(kind) && ctx.owner === who) return { allow: true };
   if (REOPEN.has(kind) && ctx.owner === who) return { allow: true };
   if ((ctx.closed || lineClosed(line)) && survivesClose(line) && ctx.owner === who) return { allow: true };

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, stallLineKeys, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from '../governor.mjs';
 
 const tripMs = 30 * 60000;
@@ -151,8 +152,17 @@ test('several line nudges update one inbox row and the open count stays 1', () =
   assert.equal(inbox[0].id, 'handoff:xray#1199:ready:abc');
   assert.equal(inbox[0].nudge_level, 3);
   assert.equal(inbox[0].reason, 'nudge L3: handoff ready');
-  assert.equal(inbox[0].t_ct, '2026-11-22T08:50:00-06:00');
+  assert.equal(inbox[0].t_ct, '2026-11-22T08:00:00-06:00');
+  assert.equal(inbox[0].nudged_at, '2026-11-22T08:50:00-06:00');
   assert.deepEqual(stallLineKeys(inbox[0]), ['handoff:xray#1199:ready:abc', '0xrayai/xray#1199']);
+});
+
+test('a card nudge keeps the original time', () => {
+  const src = fs.readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
+  const start = src.indexOf('function retouchNudge');
+  const body = src.slice(start, src.indexOf('function boardWorkSources', start));
+  assert.match(body, /line\.nudged_at = n\.t_ct/);
+  assert.doesNotMatch(body, /line\.t_ct\s*=/);
 });
 
 test('after an ack, a new stale line on the same card gets one more stall wake', () => {

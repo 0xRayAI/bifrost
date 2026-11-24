@@ -37,7 +37,8 @@ KEEP_S = 3 * 86400
 MAX_SEEN = 60000
 SEED_GRACE_S = 600   # events stamped this long before the seed pass still count as live
 ROUTE_MAX_AGE_S = int(os.environ.get("ROUTE_MAX_AGE_S", 6 * 3600))   # an id first seen this late is backfill: never delivered
-KIND_MAP = {"pr_commit": "pr_update", "pr_force_push": "pr_update", "pr_ready": "pr_update"}
+KIND_MAP = {"pr_commit": "pr_update", "pr_force_push": "pr_update", "pr_ready": "pr_update",
+            "pr_review_requested": "review_requested"}
 
 
 def _load(p, d):
@@ -243,18 +244,27 @@ def _direct_all(event, roles):
     for seat, r in (roles.get("extra_seats") or {}).items():
         if not isinstance(r, dict) or not r:
             continue
-        hit = kind in (r.get("kinds") or [])
-        if hit and kind == "op_deploy":
-            hit = str(event.get("status") or "").upper() in ("SUCCESS", "CRASHED", "FAILED", "FAILURE", "ERROR", "REMOVED")
-        hit = hit or (kind == "merged" and str(event.get("base") or "").casefold() in [b.casefold() for b in r.get("merge_bases") or []])
+        needles = r.get("needles") or []
+        kind_hit = kind in (r.get("kinds") or [])
+        if kind_hit and kind == "op_deploy":
+            kind_hit = str(event.get("status") or "").upper() in ("SUCCESS", "CRASHED", "FAILED", "FAILURE", "ERROR", "REMOVED")
+        base_hit = kind == "merged" and str(event.get("base") or "").casefold() in [b.casefold() for b in r.get("merge_bases") or []]
         text_kind = kind.startswith("issue") or "comment" in kind or kind in ("pr_open", "pr_update", "issue_open")
-        hit = hit or text_kind and any(inbox._has(hay, n) for n in r.get("needles") or [])
+        text_hit = bool(text_kind and any(inbox._has(hay, n) for n in needles))
         mention_hay = " ".join("@" + m for m in tagged)
-        hit = hit or bool(mention_hay) and any(inbox._has(mention_hay, n) for n in r.get("needles") or [])
-        if hit:
-            line = inbox._line(event, seat, r.get("reason") or "routed")
-            if line:
-                out.append(line)
+        mention_hit = bool(mention_hay) and any(inbox._has(mention_hay, n) for n in needles)
+        if not (kind_hit or base_hit or text_hit or mention_hit):
+            continue
+        line = inbox._line(event, seat, r.get("reason") or "routed")
+        if not line:
+            continue
+        if text_hit or mention_hit:
+            line["ask"] = True
+            line["routed_by"] = "needle"
+        elif kind in ("review_requested", "pr_review_requested"):
+            line["ask"] = True
+            line["routed_by"] = "kind"
+        out.append(line)
     ph = roles.get("pr_heads") or {}
     if kind in (ph.get("kinds") or []) and event.get("number") is not None:
         sha = str(event.get("sha") or event.get("head_sha") or (event.get("_inbox") or {}).get("sha") or "")[:12]

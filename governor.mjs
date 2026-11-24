@@ -205,7 +205,7 @@ export function rememberStallFired(fired, line) {
   return set;
 }
 
-/** Update the existing inbox row in place. Same id, bumped level and time. Never appends. */
+/** Update the existing inbox row in place. Same id. The nudge time is nudged_at. t_ct stays. Never appends. */
 export function applyLineNudge(inbox, lineId, { level, t_ct, woken } = {}) {
   const rows = Array.isArray(inbox) ? inbox : [];
   const id = String(lineId || '').trim();
@@ -213,7 +213,7 @@ export function applyLineNudge(inbox, lineId, { level, t_ct, woken } = {}) {
   if (!line) return { inbox: rows, line: null, wake: false, count: unackedWorkCount(rows) };
   const baseReason = String(line.reason || '').replace(/^nudge L\d:\s*/i, '');
   line.nudge_level = level;
-  if (t_ct) line.t_ct = t_ct;
+  if (t_ct) line.nudged_at = t_ct;
   line.reason = ('nudge L' + level + ': ' + baseReason).slice(0, 300);
   const wokenSet = woken instanceof Set ? woken : null;
   const wake = !wokenSet || !lineAlreadyFired(line, wokenSet);
