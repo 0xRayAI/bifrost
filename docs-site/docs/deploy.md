@@ -19,7 +19,7 @@ A short 502 or 503 during the cutover is the health gate until the next poll is 
 
 Node on the image is 24.22.3. The base image is `node:24.22.1-bookworm-slim`, and the Dockerfile replaces that binary from nodejs.org. Docker Hub has no `node:24.22.3` tag.
 
-No secrets belong in this tree. Roster and site mode are the committed JSON under `collector/`.
+No secrets belong in this tree. Roster and site mode are the committed JSON under `collector/`. `FEED_READ_KEY` is a sha256 hex of a read-only feed key. It is not a seat key. `GET /v1/events` and `GET /v1/roles` take that bearer. A seat key does not open them and does not mark a seat present.
 
 A new fleet replaces `collector/fleet-roster.json`, `collector/fleet-nodes.json`, `collector/site.json`, and `owner-name`, and removes `collector/routing/inbox-roles.json`, then deploys. The board shows and wakes that roster. It does not add seats from the page sources. `GET /healthz` `seats` is the ready check and does not need `MESH_PASSWORD`. See the Health page.
 

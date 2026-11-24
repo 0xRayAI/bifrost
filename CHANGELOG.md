@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A read-only feed key (`FEED_READ_KEY`, a sha256 hex) opens `GET /v1/events` and `GET /v1/roles`. It is not a seat. The same bearer does not resolve in `seatOf`, and those routes never call `touchSeat`, so a feed read does not mark anyone present. `/v1/events` is `{cursor, events}`, or a `since` delta, with private repo names and titles masked the same way as the login feed and with no fleet. `/v1/roles` is `{seat, role}` from the deployed roster. A seat key, a session cookie, and a missing key are 401.
 - A fresh fleet shows and wakes only the seats in `collector/fleet-roster.json` (or `LIVE_SEAT_IDS`). The page sources, the public avatar tree, the `LIVE_SEAT_IDS` fallback, the coordinator / operator / reviewer defaults, and the station tick no longer name a team. `GET /healthz` `seats` is that id list with no password, and `arch1_launch` / `arch1_inbox` are present only when `arch1` is in the fleet. xray#1245 xray#1242
 - The board says what the picture means. The clock says Central time. A fleet image can replace the 0xRay mark. The header credit is small: bifrost by 0xray.
 - A line nudge keeps the original `t_ct` and writes the nudge time on `nudged_at`. A head change emits `pr_commit` when the author has no GitHub user, and when a newer update is the first time a stored pull shows a head. A needle hit and a review request land with `ask: true` and can wake. A new head still does not. Lines already stored are not re-filtered. #121 #122 #123
