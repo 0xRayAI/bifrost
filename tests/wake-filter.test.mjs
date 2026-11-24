@@ -621,6 +621,20 @@ test('the critic-return line wakes critic only once Actions has confirmed every 
   assert.equal(allowWake(on, 'critic', again, ctx({ state, head: sha, runs: green })).allow, false);
 });
 
+test('a routed ask wakes, and a new-head line does not', () => {
+  const ask = line({ type: 'issue_comment', kind: 'issue_comment', title: 'hello', ask: true, routed_by: 'needle' });
+  assert.equal(allowWake(on, 'critic', ask, ctx()).allow, true);
+  assert.equal(readWakeFilter({}).askOn, true);
+  const off = readWakeFilter({ SEAT_WAKE_FILTER: JSON.stringify({ wake_on_ask: false }) });
+  assert.equal(allowWake(off, 'critic', ask, ctx()).allow, false);
+  const skipCritic = readWakeFilter({ SEAT_WAKE_FILTER: JSON.stringify({ wake_on_ask: { critic: false } }) });
+  assert.equal(allowWake(skipCritic, 'critic', ask, ctx()).allow, false);
+  assert.equal(allowWake(skipCritic, 'forge', ask, ctx()).allow, true);
+  assert.equal(readWakeFilter({ SEAT_WAKE_ON_ASK: '0' }).askOn, false);
+  assert.equal(allowWake(readWakeFilter({ SEAT_WAKE_ON_ASK: '0' }), 'forge', ask, ctx()).allow, false);
+  assert.equal(allowWake(on, 'critic', line({ type: 'pr_update', reason: 'review ask: new PR or new head' }), ctx()).allow, false);
+});
+
 test('a new head wakes the reviewer only when that opt-in is on, once per sha', () => {
   const head = line({ type: 'pr_commit', kind: 'pr_commit', sha: 'abc1234' });
   assert.equal(allowWake(on, 'critic', head, ctx()).allow, false);

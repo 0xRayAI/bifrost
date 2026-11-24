@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A line nudge keeps the original `t_ct` and writes the nudge time on `nudged_at`. A head change emits `pr_commit` when the author has no GitHub user, and when a newer update is the first time a stored pull shows a head. A needle hit and a review request land with `ask: true` and can wake. A new head still does not. Lines already stored are not re-filtered. #121 #122 #123
 - A throw from the station tick is logged. The next minute still runs.
 - One login, alias, or `@handle` claimed by two seats is a startup warning and a `conflicts` array on `GET /routing`. The process still boots. The first seat in the map keeps the claim. `wake_filter.reviewer_on_new_head` wakes a reviewer once per pull head and stays off.
 - A board ready handoff (type `packet`, kind `ready`) on the current head wakes the seat it is addressed to. Its kind is `ready`, so the filter's `packet` rule never matched it. A queued ready handoff (the seat is busy) still offers its wake; busy sets queue position, not the wake. A head the card moved past is still dropped, the author's own line still skips, and a delivered line wakes once. #108
@@ -10,7 +11,7 @@
 - The Actions-runs retry counts the first arm and each timer retry. A burst of check events on one pending head no longer spends the 30-try cap and drops the head before CI finishes. #108
 
 - `/healthz` `wakes` reports `disabled` when the last attempt was a paused routine (HTTP 400, automation disabled), and `stale` when a fail is older than 6 hours, instead of leaving a sticky `fail`. #105
-- A later line nudge updates the existing inbox row in place (same id, bumped level and time). It does not append a second line. Once the fired set holds that line's key, L2 and L3 of the ladder do not wake; that is intended. The key is dropped when the line is acked or the card closes, so later stale work on the same card can fire once more.
+- A later line nudge updates the existing inbox row in place (same id, bumped level, nudge time on `nudged_at`). It does not append a second line. It does not rewrite `t_ct`. Once the fired set holds that line's key, L2 and L3 of the ladder do not wake; that is intended. The key is dropped when the line is acked or the card closes, so later stale work on the same card can fire once more.
 - After the #83 wake filter, two holes still rang seats. A later line nudge copied a board-only GitHub line (a new-head heads-up, a push, a deploy) and prefixed `nudge L1:` on the reason, which the filter treated as an act-now signal. The stall clock also minted a new `clock:<started_at>` id on every run, so one stale line (a #1082 breaker, for example) could wake the seat over and over, and the title counted those clock lines as open work. A stall now fires at most once per card or line id and the title count matches the unacked work inbox. A `needs_human` line to a seat wakes once per card; a line addressed to a human does not wake a bot. Part of 0xRayAI/xray#942.
 
 

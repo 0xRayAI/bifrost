@@ -268,7 +268,7 @@ const ingestDelta = d => ingestSrc('box', d.upsert, headerOf(d.header), d.remove
 // pusher-auth readback (ingest responses only): which seats the merged board shows working, no event data
 const fleetBrief = () => { refreshWorking(); const f = header.fleet || {}; return { box_stale: !!f.box_stale, cloud_working: !!f.cloud?.working, working: Object.keys(f.working || {}).sort() }; };
 // ---- builder inbox mirror (port of example-org/xray PR #5 house/live/activity.mjs): lines persist on the volume
-const INBOX_KEYS = new Set(['id', 't_ct', 'seat', 'type', 'repo', 'number', 'sha', 'title', 'url', 'reason', 'from', 'to', 'kind', 'flag', 'batch', 'labels']);
+const INBOX_KEYS = new Set(['id', 't_ct', 'seat', 'type', 'repo', 'number', 'sha', 'title', 'url', 'reason', 'from', 'to', 'kind', 'flag', 'batch', 'labels', 'ask', 'routed_by']);
 const INBOX_BANNED = /body|text|message/i;   // tested against field NAMES only; values (e.g. type "prompt_message") are fine
 const INBOX_FILE = path.join(process.env.MESH_DATA_DIR || '/data', 'inbox', 'builder.jsonl');
 let inboxLines = [];
@@ -289,6 +289,8 @@ function validInboxLine(d) {
   if (d.to != null && !toToken(d.to)) return false;
   if (d.kind != null && !tokenOk(d.kind)) return false;
   if (d.flag != null && !tokenOk(d.flag)) return false;
+  if (d.ask != null && typeof d.ask !== 'boolean') return false;
+  if (d.routed_by != null && !tokenOk(d.routed_by)) return false;
   if (d.labels != null && !labelsOk(d.labels)) return false;
   if (d.batch != null && (typeof d.batch !== 'string' || d.batch.length > 2000)) return false;
   if (d.seat.toLowerCase() !== 'builder') return false;
@@ -1342,6 +1344,8 @@ function inboxLineError(d) {
   if (d.to != null && !toToken(d.to)) parts.push('to must be a seat id');
   if (d.kind != null && !tokenOk(d.kind)) parts.push('kind must be a string');
   if (d.flag != null && !tokenOk(d.flag)) parts.push('flag must be a string');
+  if (d.ask != null && typeof d.ask !== 'boolean') parts.push('ask must be a boolean');
+  if (d.routed_by != null && !tokenOk(d.routed_by)) parts.push('routed_by must be a short name');
   if (d.labels != null && !labelsOk(d.labels)) parts.push('labels must be a list of short names');
   if (d.batch != null && typeof d.batch !== 'string') parts.push('batch must be a string');
   else if (typeof d.batch === 'string' && d.batch.length > 2000) parts.push('batch is too long');
@@ -1928,7 +1932,7 @@ function retouchNudge(n) {
   const line = arr.find((x) => x.id === l1 || x.id === n.id);
   if (!line) return;
   line.reason = `nudge L${n.level} (${n.via || 'nudge'})`.slice(0, 200);
-  line.t_ct = n.t_ct || line.t_ct;
+  if (n.t_ct) line.nudged_at = n.t_ct;
   saveSeatInbox(seat);
 }
 // Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no nudge.
