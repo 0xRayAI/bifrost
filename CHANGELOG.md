@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A seat on the ring no longer covers the owner. The top of the ring stays the owner. The bottom stays Railway.
+
 ## 1.0.0 — 2026-11-25
 
 - First tagged release of the live board. Pin `v1.0.0`. bifrost#113
