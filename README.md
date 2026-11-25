@@ -4,6 +4,12 @@ Live board for burst-live. Railway root is `/`. The service builds this Dockerfi
 
 The manual is a Docusaurus site in `docs-site/`. It is not copied into the image.
 
+## Release
+
+The current tag is `v1.0.0`. Pin that tag. `main` moves ahead of it.
+
+xray `v4.2.4` does not pin this tag. Its `house/live` mirror is an older copy. The board Railway builds is this repo.
+
 ```bash
 cd docs-site && npm install && npm run build
 ```

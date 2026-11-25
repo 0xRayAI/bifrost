@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 1.0.0 — 2026-11-25
+
+- First tagged release of the live board. Pin `v1.0.0`. bifrost#113
 - A prompt can name its receiver. The owner name draws on the mesh. A prompt that names `owner/repo#n` lands on that card. The archive keeps the note. A seat token can read `/history`. A queued ready line still gets its card. A closed needs_human line does not re-arm. A pull that closed without merging is settled, not stored as a review. A reviewer handoff does not take the card. Wake health reports the last wake time, and only an HTTP 400 that says disabled is a paused routine. Refs xray#1263, bifrost#111, bifrost#107, bifrost#104, bifrost#103, bifrost#99.
 - A closed nudge leaves the inbox. Seat activity that names a live card becomes a beat on that card when the seat is tied to it, and that beat closes only the posting seat's nudge. A down seat's card nudge, line nudge, missing handoff, and stall wake move to the next live seat. A seat can mark itself offline with turn action `offline`. An acked handoff stays closed after its card ages off the board. Close and reopen share one board write. Refs bifrost#127, bifrost#114, xray#1045.
 - A seat that does not answer, or whose wake webhook is disabled or cannot be reached, escalates. Forge falls through to arch1. Any other seat falls through to forge, and to arch1 when forge is down too. The line moves to that seat's inbox, and a next seat that has a webhook is rung. A dropped connection (`UND_ERR_SOCKET`, `ETIMEDOUT`, `ENETUNREACH`, `EHOSTUNREACH`, `EPIPE`) counts as unreachable. A nudge does not escalate, and arch1 is the end of the chain. A delivered wake is still not presence.
