@@ -52,6 +52,41 @@ export function defaultIssueSeat(env = {}) {
   return 'forge';
 }
 
+// One step down the wake chain. Forge falls through to arch1. Any other seat falls through to forge.
+export function nextAgent(seat, seats) {
+  const id = String(seat || '').trim().toLowerCase();
+  const known = new Set((Array.isArray(seats) ? seats : []).map(s => String(s || '').trim().toLowerCase()).filter(Boolean));
+  if (!id || id === 'arch1') return '';
+  if (id === 'forge') return known.has('arch1') ? 'arch1' : '';
+  if (known.has('forge')) return 'forge';
+  return known.has('arch1') ? 'arch1' : '';
+}
+
+// Walk past seats that are already down. Forge with a dead webhook lands on arch1.
+export function escalateTarget(seat, seats, unreachable) {
+  const dead = new Set();
+  let cur = String(seat || '').trim().toLowerCase();
+  const down = id => !id || dead.has(id) || (typeof unreachable === 'function' && unreachable(id));
+  for (let i = 0; i < 4; i++) {
+    dead.add(cur);
+    const next = nextAgent(cur, seats);
+    if (!next || dead.has(next)) return '';
+    if (!down(next)) return next;
+    cur = next;
+  }
+  return '';
+}
+
+// A wake that never reached the seat: the automation is disabled, the key is missing, or the call did not connect.
+export function wakeUnreachable(status) {
+  if (!status || status.ok) return false;
+  const error = String(status.error || '').toLowerCase();
+  const detail = String(status.detail || '').toLowerCase();
+  const text = error + ' ' + detail;
+  if (/disabled|timeout|network|no_key|econn|enotfound|eai_again/.test(text)) return true;
+  return /^http_50[234]$/.test(error);
+}
+
 export function createWakeState() {
   return {
     sentSha: new Map(), queuedSha: new Map(), cool: new Map(), sentAt: new Map(), turnOpen: new Map(),
