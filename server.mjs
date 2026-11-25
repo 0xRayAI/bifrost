@@ -18,10 +18,10 @@ import { Worker } from 'node:worker_threads';
 import { seatPresence, presentSeat, foldSeatTouch, fleetConfigOf, configuredRoster, readWakeOk, writeWakeOk, seatStatus, stampSeatStatus } from './presence.mjs';
 import { parseAllowlist, mergeCards, sourceCardsFrom, projectAllowed, validateItem, workEventToItem, cardNoNudge, workItemNewer } from './source.mjs';
 import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins, routingConflictsFromDir } from './routes.mjs';
-import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from './governor.mjs';
+import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired, keepClosedStall } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
-import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, activityKeepsNudge, toToken } from './worktrack.mjs';
+import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, activityKeepsNudge, mentionedCard, toToken } from './worktrack.mjs';
 import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking, escalateTarget, pickLiveSeat, wakeUnreachable } from './wake-gate.mjs';
 import { readWakeFilter, allowWake, owedSeat, commitWake, readyPacket, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
@@ -31,7 +31,7 @@ import { openHistory } from './history-store.mjs';
 import { oversizedCardDays, compactOversized } from './compact-cards.mjs';
 import { creditCiFrom, loadCiNodes } from './ci-credit.mjs';
 import { pinnedOrigin } from './origin.mjs';
-import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, validMergeReview, handoffKind, routeHandoff, commitInboxMove } from './handoff.mjs';
+import { missingHandoffs, hotfixMergeLine, isHotfixTitle, isMergeHandoff, ackMergeRecord, handoffKind, routeHandoff, commitInboxMove } from './handoff.mjs';
 import { clockStamp, writeStartAfter } from './chicago-stamp.mjs';
 import { shellVersion, SHELL_HEADER } from './shell-version.mjs';
 import { applySchedule, normalizeFleetMode, normalizeFleetRoute, scheduleBoundary, wakeAllowed } from './fleet-mode.mjs';
@@ -1089,11 +1089,13 @@ function ackLines(seat, what, review) {
     if (have.has(id)) continue;
     const line = lineOf(id);
     // A merged pull has no review left to collect. Store the pull URL. An open pull still needs a review link.
-    const settledMerge = line && isMergeHandoff(line) && itemClosed(line.repo, line.number);
-    if (line && isMergeHandoff(line) && !validMergeReview(review, line) && !settledMerge) { blocked = true; continue; }
+    const merged = line && isMergeHandoff(line) && itemMerged(line.repo, line.number);
+    const record = line && isMergeHandoff(line) ? ackMergeRecord(line, review, { merged, closed: itemClosed(line.repo, line.number) && !merged }) : {};
+    if (record === null) { blocked = true; continue; }
     have.add(id); n++;
     const row = { seat, line: id, t_ct: ctStamp(Date.now()) };
-    if (line && isMergeHandoff(line)) row.review = validMergeReview(review, line) ? review : String(line.url || '');
+    if (record.review) row.review = record.review;
+    if (record.settled) row.settled = record.settled;
     appendArchive('acks', row);
     if (line) clearStallFired(stallFired, line);
   }
@@ -1162,7 +1164,7 @@ function closedItems() {
   for (const { e } of evs.values()) {
     if (!e || e.number == null || !(CLOSE_KINDS.has(e.kind) || REOPEN_KINDS.has(e.kind))) continue;
     const k = `${String(e.repo || '').toLowerCase()}#${Number(e.number)}`, t = Date.parse(e.t_ct) || 0, prev = m.get(k);
-    if (!prev || t >= prev.t) m.set(k, { t, closed: CLOSE_KINDS.has(e.kind) });
+    if (!prev || t >= prev.t) m.set(k, { t, closed: CLOSE_KINDS.has(e.kind), kind: e.kind });
   }
   closedSeq = seq; closedMap = m; return m;
 }
@@ -1170,6 +1172,11 @@ function itemClosed(repo, number) {
   if (number == null || !repo) return false;
   const v = closedItems().get(`${String(repo).toLowerCase()}#${Number(number)}`);
   return !!(v && v.closed);
+}
+function itemMerged(repo, number) {
+  if (number == null || !repo) return false;
+  const v = closedItems().get(`${String(repo).toLowerCase()}#${Number(number)}`);
+  return !!(v && v.closed && v.kind === 'merged');
 }
 function lineCard(l) {
   return bfCards.find(x => x.repo && String(x.repo).toLowerCase() === String(l.repo || '').toLowerCase() && Number(x.number) === Number(l.number));
@@ -1646,8 +1653,10 @@ function postSeatLines(parsed, onlySeat) {
     if (s === 'builder') { const c = seatInbox['builder-cloud']; if (!c.some(x => x.id === l.id)) { const copy = { ...stored, seat: 'builder-cloud' }; c.push(copy); touched.add('builder-cloud'); fresh.push(copy); offer.push(copy); } } }
   for (const s of touched) saveSeatInbox(s);
   if (offer.length) { try { offerLines(offer); } catch { /* keep the inbox write */ } }
-  for (const l of fresh) ensurePacketCard(l);
-  for (const l of fresh) void arch1Launch.consider(l);
+  const setup = fresh.slice();
+  for (const l of offer) if (readyPacket(l) && !setup.includes(l)) setup.push(l);
+  for (const l of setup) ensurePacketCard(l);
+  for (const l of setup) void arch1Launch.consider(l);
   return { status: 200, added, rejected: refs, ...(routedSeat ? { seat: routedSeat, queued: routedQueued } : {}) };
 }
 // ---- Assistant / emitter: the sample MCP server posts one event per tool call / OAuth sign-in (POST /emit, Bearer = the
@@ -2813,6 +2822,7 @@ function releaseClosedStallKeys() {
   for (const seat of SEAT_IDS) {
     for (const line of seatInbox[seat] || []) {
       if (!line || !(itemClosed(line.repo, line.number) || settledLine(line))) continue;
+      if (keepClosedStall(line)) continue;
       const before = stallFired.size;
       clearStallFired(stallFired, line);
       if (stallFired.size !== before) changed = true;
@@ -3482,9 +3492,11 @@ function boardWord() {
   return 'live';
 }
 const WAKE_STALE_MS = 6 * 3600 * 1000;
-function wakeIsDisabled(st) {   // paused routine: HTTP 400 "Automation ... is disabled"; error is sliced to 40 chars when persisted
+function wakeIsDisabled(st) {   // paused routine: HTTP 400 whose text says disabled. Any other error that contains the word stays a fail.
   if (!st) return false;
-  return /disabled/i.test(`${st.error || ''} ${st.detail || ''}`);
+  const error = String(st.error || '');
+  if (error !== 'http_400' && !error.startsWith('http_400')) return false;
+  return /disabled/i.test(`${error} ${st.detail || ''}`);
 }
 function wakeHealth(now = Date.now()) {   // seat -> ok | fail | disabled | stale | no_key | idle (configured, nothing sent yet); never a url or key
   const out = {};
@@ -3499,6 +3511,14 @@ function wakeHealth(now = Date.now()) {   // seat -> ok | fail | disabled | stal
     if (wakeIsDisabled(st)) { out[seat] = 'disabled'; continue; }
     const at = Date.parse(st.at || '');
     out[seat] = Number.isFinite(at) && now - at > WAKE_STALE_MS ? 'stale' : 'fail';
+  }
+  return out;
+}
+function wakeHealthAt() {
+  const out = {};
+  for (const [seat] of Object.entries(SEAT_WEBHOOKS)) {
+    const at = wakeQ.get(seat)?.status?.at;
+    if (typeof at === 'string' && at) out[seat] = at;
   }
   return out;
 }
@@ -3622,7 +3642,7 @@ function healthBody() {   // public: counts, times, ages (s) and wake states; no
     cards_behind: behind, stale_status: staleStatus,
     last_tick: passAt ? new Date(passAt).toISOString() : null, stalled,
     history_ready: historyState.ready, history_redis: historyState.redis, history_cards: historyState.cards,
-    origin: ORIGIN || null, wakes: wakeHealth(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, route: fleetMode.route, by: fleetMode.by, at: fleetMode.at }, seats: FLEET.publicSeats, nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
+    origin: ORIGIN || null, wakes: wakeHealth(), wakes_at: wakeHealthAt(), wake_stats: publicStats(wakeState, now, wakeConfig(process.env).statMs), fleet_mode: { mode: fleetMode.mode, route: fleetMode.route, by: fleetMode.by, at: fleetMode.at }, seats: FLEET.publicSeats, nudged_lines: nudges.filter(n => n.kind === 'line' && !n.closed_at).length, routing: ROUTING.ok ? 'ok' : 'fail', governor_changes: governorChanges };
   if (SEAT_IDS.includes('arch1')) {
     body.arch1_launch = arch1Launch.health();
     body.arch1_inbox = arch1InboxDepth();
@@ -4042,8 +4062,10 @@ function activityEvent(line, opts) {
   const note = prompt && typeof line.note === 'string' ? line.note : '';
   const extra = prompt ? '' : (line.tag ? ' · ' + line.tag : '');
   const label = prompt ? `${from} → ${to}${note ? ': ' + note : ''}` : `${line.seat} ${line.kind} ${line.action}${extra}`;
+  const ref = mentionedCard([line.tag, line.note, line.pr].filter(part => typeof part === 'string').join('\n'));
   const ev = { id: `act:${line.id}`, t_ct: ctOffset(line.t_ct), from, to, kind: `seat_${line.kind}`, direction: 'internal',
-    label, src_file: 'activity', repo: null };
+    label, src_file: 'activity', repo: ref ? ref.repo : null };
+  if (ref) ev.number = ref.number;
   if (note) ev.note = note;
   if (prompt && line.room) ev.room = line.room;
   if (opts && opts.moves === false) ev.moves = false;
@@ -4519,7 +4541,11 @@ async function handle(req, res) {
     return json(req, res, 200, { date, kind, lines: readArchive(date, kind).lines });
   }
   if ((p === '/history' || p === '/history/cards' || p === '/history/transitions' || p === '/history/export') && m === 'GET') {
-    if (!validSession(req)) return json(req, res, 401, { error: 'unauthorized' });
+    if (!validSession(req)) {
+      let who;
+      try { who = await seatOf(req); } catch { return json(req, res, 503, { error: 'could not verify token, retry' }, { 'Retry-After': '30' }); }
+      if (!who) return json(req, res, 401, { error: 'unauthorized' });
+    }
     const q = {
       state: url.searchParams.get('state') || '',
       card: url.searchParams.get('card') || '',

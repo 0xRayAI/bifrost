@@ -993,6 +993,12 @@ function activityCard(line, board, repos, index) {
 }
 
 // A GitHub beat still closes every nudge. An activity beat closes only the seat that posted it.
+export function mentionedCard(text) {
+  const match = /([A-Za-z0-9](?:-[A-Za-z0-9]|[A-Za-z0-9]){0,38}\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99})#(\d{1,8})/.exec(String(text || ''));
+  if (!match) return null;
+  return { repo: match[1], number: Number(match[2]) };
+}
+
 export function activityKeepsNudge(card, nudge) {
   if (!card || !nudge) return false;
   const act = Number(card.activity_at) || 0;
@@ -1083,7 +1089,9 @@ export function stampWorkCards(cards, { activity = [], lines = [], comments = []
     const type = String(line.type || '').toLowerCase();
     const kind = String(line.kind || '').toLowerCase();
     if (!(type === 'packet' && WORK_HANDOFF.has(kind)) && kind !== 'handoff' && type !== 'handoff') continue;
-    const seat = workSeat(line.to, seatSet) || workSeat(line.seat, seatSet) || workSeat(line.from, seatSet);
+    const reviewer = workSeat(roles && roles.handoffs && roles.handoffs.reviewer, seatSet);
+    const ordered = [line.to, line.seat, line.from].map(value => workSeat(value, seatSet)).filter(Boolean);
+    const seat = ordered.find(value => value !== reviewer) || '';
     const ref = line.repo && line.number != null ? `${line.repo}#${line.number}` : (line.card || line.key);
     note(ref, seat, workAt(line), 'handoff');
   }

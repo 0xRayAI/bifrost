@@ -74,6 +74,22 @@ function loadMesh() {
   return L;
 }
 
+test('owner and a lowercase seat name draw on the mesh', () => {
+  const live = fs.readFileSync(path.join(APP, 'public', 'live.js'), 'utf8');
+  const prev = globalThis.LiveMesh;
+  new Function(live)();
+  const window = globalThis;
+  window.FLEET_SPEC = {
+    owner: 'Blaze', name: 'Bifrost', title: 'Bifrost', seats: [{ id: 'forge', role: 'eng' }], layout: {}, aliases: {},
+  };
+  new Function('window', 'location', fs.readFileSync(path.join(APP, 'public', 'live-config.js'), 'utf8'))(window, { search: '' });
+  new Function('window', fs.readFileSync(path.join(APP, 'public', 'site-config.js'), 'utf8'))(window);
+  const mesh = window.LiveMesh;
+  assert.deepEqual(mesh.resolveNodes({ kind: 'seat_prompt', from: 'owner', to: 'forge' }), ['Blaze', 'forge']);
+  assert.deepEqual(mesh.resolveNodes({ kind: 'seat_prompt', from: 'blaze', to: 'Forge' }), ['Blaze', 'forge']);
+  if (prev) globalThis.LiveMesh = prev;
+});
+
 test('the page keeps CloudAgents and drops only the board name', () => {
   const L = loadMesh();
   const out = L.applyFeed({ events: [] }, {

@@ -7,11 +7,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { commitInboxMove, handoffChain, routeHandoff } from '../handoff.mjs';
+import { ackMergeRecord, commitInboxMove, handoffChain, routeHandoff } from '../handoff.mjs';
 import { seatStatus } from '../presence.mjs';
 
 const APP = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHA = 'abcdef1234567890';
+
+test('a closed unmerged pull is settled and a merged pull keeps the url', () => {
+  const line = { type: 'packet', kind: 'merge', repo: '0xRayAI/bifrost', number: 129, url: 'https://github.com/0xRayAI/bifrost/pull/129' };
+  assert.deepEqual(ackMergeRecord(line, '', { closed: true }), { settled: 'closed' });
+  assert.deepEqual(ackMergeRecord(line, '', { merged: true }), { review: line.url });
+  assert.equal(ackMergeRecord(line, ''), null);
+});
 
 test('seat status is online, busy, or offline from the heartbeat', () => {
   const now = Date.now();

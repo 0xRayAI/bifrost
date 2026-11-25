@@ -2,7 +2,8 @@
 // The owner is the latest seat on that card. builder-cloud is not an owner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activityKeepsNudge, stampWorkCards } from '../worktrack.mjs';
+import { activityKeepsNudge, mentionedCard, stampWorkCards } from '../worktrack.mjs';
+import { project } from '../archive.mjs';
 
 const SEATS = ['mill', 'forge', 'eng', 'critic', 'arch1'];
 
@@ -169,6 +170,23 @@ test('an unrelated seat, a closed card, and an ambiguous bare number stay seat-o
   });
   assert.deepEqual(ambiguous[0].beats, []);
   assert.deepEqual(ambiguous[1].beats, []);
+});
+
+test('a handoff to the reviewer keeps the working seat as owner', () => {
+  const [kept] = stampWorkCards([card({ owner: 'mill', stage: 'open' })], {
+    seats: SEATS,
+    roles: ROLES,
+    lines: [{ type: 'packet', kind: 'ready', from: 'mill', to: 'critic', seat: 'critic', repo: '0xRayAI/clearing', number: 39, t_ct: '2026-11-25T17:00:00Z' }],
+  });
+  assert.equal(kept.owner, 'mill');
+});
+
+test('a prompt note names the card it belongs on', () => {
+  assert.deepEqual(mentionedCard('see 0xRayAI/xray#1263'), { repo: '0xRayAI/xray', number: 1263 });
+  assert.equal(mentionedCard('no card here'), null);
+  const kept = project('activity', { id: '1', seq: 1, seat: 'arch1', note: '0xRayAI/xray#1263', token: 'secret' });
+  assert.equal(kept.note, '0xRayAI/xray#1263');
+  assert.equal(kept.token, undefined);
 });
 
 test('an activity beat from another seat keeps that nudge open', () => {

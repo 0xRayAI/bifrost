@@ -192,6 +192,12 @@ export function lineAlreadyFired(line, firedSet) {
   return !!keys.length && keys.some(key => firedSet.has(key));
 }
 
+// A rolling needs_human id on a closed card must not re-arm. Other closed lines still release.
+export function keepClosedStall(line) {
+  const kind = String(line && (line.type || line.kind) || '').toLowerCase();
+  return kind === 'needs_human';
+}
+
 /** Drop this line's id and card key so a later stale line on the same card can fire again. */
 export function clearStallFired(fired, line) {
   const set = fired instanceof Set ? fired : loadStallFired(fired);

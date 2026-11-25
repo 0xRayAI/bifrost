@@ -1,9 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, stallLineKeys, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from '../governor.mjs';
+import { createClock, runChoice, stallMove, isClockNudge, unackedWorkCount, stallWorkKey, stallLineKeys, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired, keepClosedStall } from '../governor.mjs';
 
 const tripMs = 30 * 60000;
+
+test('a closed needs_human line keeps its stall key', () => {
+  assert.equal(keepClosedStall({ type: 'needs_human', kind: 'needs_human' }), true);
+  assert.equal(keepClosedStall({ type: 'ci_fail' }), false);
+});
 
 test('stall noise does not move the clock', () => {
   for (const kind of ['check_run', 'check_suite', 'workflow_run', 'ci_pass', 'ci_fail', 'pr_commit', 'commit_status', 'health_ok', 'health_fail', 'deploy', 'deploy_fail', 'deploy_pending', 'op_deploy', 'probe', 'feed_push', 'x_out_root', 'seat_turn', 'seat_prompt']) {

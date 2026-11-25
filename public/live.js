@@ -135,13 +135,31 @@
   }
 
   /* Same mapping as render_mesh.resolve_nodes: which two nodes a ping travels between. */
+  function drawnNode(name, fallback) {
+    var mesh = root.LiveMesh || {};
+    var table = mesh.NODE_KEY || {};
+    var sats = mesh.SATS || SATS;
+    var raw = name == null ? '' : String(name);
+    var lower = raw.toLowerCase();
+    var mapped = raw;
+    var keys = Object.keys(table);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] === raw || String(keys[i]).toLowerCase() === lower) { mapped = table[keys[i]]; break; }
+    }
+    var want = String(mapped == null ? '' : mapped).toLowerCase();
+    var satKeys = Object.keys(sats);
+    for (var j = 0; j < satKeys.length; j++) {
+      if (satKeys[j] === mapped || satKeys[j].toLowerCase() === want) return satKeys[j];
+    }
+    return fallback;
+  }
   function resolveNodes(e) {
     var kind = LEGACY_KIND[e.kind] || e.kind;
     var src = own(ALIAS, e.from) ? 'GitHub' : e.from;
     var dst = own(ALIAS, e.to) ? 'GitHub' : e.to;
     if (kind === 'deploy' || kind === 'deploy_fail') return ['GitHub', own(SATS, 'Railway') ? 'Railway' : 'GitHub'];
-    if (!own(SATS, src)) src = 'GitHub';
-    if (!own(SATS, dst)) dst = 'GitHub';
+    src = drawnNode(src, 'GitHub');
+    dst = drawnNode(dst, 'GitHub');
     if (src === dst) dst = src !== 'GitHub' && own(SATS, 'GitHub') ? 'GitHub' : (own(SATS, 'Railway') ? 'Railway' : src);
     return [src, dst];
   }
