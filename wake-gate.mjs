@@ -83,7 +83,7 @@ export function wakeUnreachable(status) {
   const error = String(status.error || '').toLowerCase();
   const detail = String(status.detail || '').toLowerCase();
   const text = error + ' ' + detail;
-  if (/disabled|timeout|network|no_key|econn|enotfound|eai_again/.test(text)) return true;
+  if (/disabled|timeout|etimedout|network|no_key|econn|enotfound|eai_again|und_err_socket|enetunreach|ehostunreach|epipe/.test(text)) return true;
   return /^http_50[234]$/.test(error);
 }
 

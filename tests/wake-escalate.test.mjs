@@ -34,7 +34,13 @@ test('a disabled, missing, or unreachable wake is a reason to escalate', () => {
   assert.equal(wakeUnreachable({ ok: false, error: 'network' }), true);
   assert.equal(wakeUnreachable({ ok: false, error: 'no_key' }), true);
   assert.equal(wakeUnreachable({ ok: false, error: 'http_502' }), true);
+  assert.equal(wakeUnreachable({ ok: false, error: 'UND_ERR_SOCKET' }), true);
+  assert.equal(wakeUnreachable({ ok: false, error: 'ENETUNREACH' }), true);
+  assert.equal(wakeUnreachable({ ok: false, error: 'EHOSTUNREACH' }), true);
+  assert.equal(wakeUnreachable({ ok: false, error: 'EPIPE' }), true);
+  assert.equal(wakeUnreachable({ ok: false, error: 'ETIMEDOUT' }), true);
   assert.equal(wakeUnreachable({ ok: false, error: 'http_400', detail: 'bad json' }), false);
+  assert.equal(wakeUnreachable({ ok: false, error: 'http_500' }), false);
   assert.equal(wakeUnreachable({ ok: true, error: 'disabled' }), false);
   assert.equal(wakeUnreachable(null), false);
 });
