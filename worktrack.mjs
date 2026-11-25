@@ -848,12 +848,220 @@ function seatForWorkCard(card, agents, seats) {
   return '';
 }
 
+const ACTIVITY_STALL_MS = 60 * 60 * 1000;
+const GH_ISSUE_URL = new RegExp('https://github\\.com/(' + GH_OWNER + ')/(' + GH_REPO + ')/(?:pull|issues)/(\\d{1,8})\\b', 'gi');
+const FULL_CARD_REF = new RegExp('\\b(' + GH_OWNER + '/' + GH_REPO + ')#(\\d{1,8})\\b', 'gi');
+const SHORT_CARD_REF = new RegExp('(?:^|[^A-Za-z0-9_./])(' + GH_REPO + ')#(\\d{1,8})\\b', 'gi');
+const BARE_CARD_NUM = /(?:^|[^A-Za-z0-9_])#(\d{1,8})\b/g;
+const ACTIVITY_PACKET = /\bpacket:[A-Za-z0-9_.:/#-]{1,80}/gi;
+
+function cardIsLive(card) {
+  return !!(card && !card.pinned && String(card.state || '').toLowerCase() === 'live');
+}
+
+function cardIsClosed(card) {
+  if (!card || card.pinned) return false;
+  const state = String(card.state || '').toLowerCase();
+  const stage = String(card.stage || '').toLowerCase();
+  return state === 'closed' || stage === 'done';
+}
+
+function allMatches(re, text) {
+  re.lastIndex = 0;
+  return [...String(text || '').matchAll(re)];
+}
+
+function boardIndex(list) {
+  const byKey = new Map();
+  for (const card of list || []) {
+    const key = workKey(card);
+    if (key && !byKey.has(key)) byKey.set(key, card);
+  }
+  return byKey;
+}
+
+function knownRepos(list, repos) {
+  const names = new Set();
+  for (const repo of repos || []) {
+    const name = String(repo || '').trim().toLowerCase();
+    if (name.includes('/')) names.add(name);
+  }
+  for (const card of list || []) {
+    const repo = String(card && card.repo || '').trim().toLowerCase();
+    if (repo.includes('/')) names.add(repo);
+  }
+  return [...names];
+}
+
+function roleSeats(roles, seatSet) {
+  const out = [];
+  const add = value => {
+    const seat = workSeat(value, seatSet);
+    if (seat && !out.includes(seat)) out.push(seat);
+  };
+  add(roles && roles.handoffs && roles.handoffs.reviewer);
+  const seats = roles && roles.seats;
+  if (seats && typeof seats === 'object') {
+    add(seats.operator && seats.operator.seat);
+    add(seats.coord && seats.coord.seat);
+  }
+  return out;
+}
+
+function seatTiedToCard(card, seat, seatSet, roles) {
+  if (!seat) return false;
+  const packet = card && card.packet && typeof card.packet === 'object' ? card.packet : {};
+  const names = [
+    card && card.owner, card && card.nudge_to, card && card.assignee, card && card.assignee_seat,
+    card && card.author, card && card.opener, card && card.from,
+    packet['next owner'], packet.next_owner, packet.reviewer,
+  ];
+  for (const name of names) if (workSeat(name, seatSet) === seat) return true;
+  return roleSeats(roles, seatSet).includes(seat);
+}
+
+function activityNote(line) {
+  const raw = typeof line.note === 'string' && line.note ? line.note : (typeof line.tag === 'string' ? line.tag : '');
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+function activityLineId(line) {
+  if (typeof line.id === 'string' && line.id.trim()) return line.id.trim();
+  if (Number.isInteger(line.seq) && line.seq > 0) return String(line.seq);
+  return '';
+}
+
+// A bare #n that is closed on one repo and live on another is not a match.
+function bareCard(text, board) {
+  const nums = new Set();
+  for (const match of String(text || '').matchAll(BARE_CARD_NUM)) nums.add(Number(match[1]));
+  const found = [];
+  for (const number of nums) {
+    const same = (board || []).filter(card => Number(card && card.number) === number);
+    const live = same.filter(cardIsLive);
+    const closed = same.filter(cardIsClosed);
+    if (closed.length && live.length) return { ambiguous: true };
+    if (live.length > 1) return { ambiguous: true };
+    if (live.length === 1) found.push(live[0]);
+  }
+  return { cards: found };
+}
+
+function activityCard(line, board, repos, index) {
+  const text = [line.tag, line.pr, line.note, line.card, line.key].filter(part => typeof part === 'string').join('\n');
+  const keys = new Set();
+  for (const field of [line.card, line.key, line.tag]) {
+    const raw = String(field || '').trim();
+    const lower = raw.toLowerCase();
+    if (lower.startsWith('packet:') && lower.length > 7) keys.add(lower);
+    else if (CARD_REF.test(raw)) keys.add(lower);
+  }
+  for (const match of allMatches(GH_ISSUE_URL, text)) keys.add(`${match[1]}/${match[2]}#${Number(match[3])}`.toLowerCase());
+  for (const match of allMatches(FULL_CARD_REF, text)) keys.add(`${match[1]}#${Number(match[2])}`.toLowerCase());
+  for (const match of allMatches(ACTIVITY_PACKET, text)) keys.add(match[0].toLowerCase());
+  const named = [];
+  for (const key of keys) {
+    const card = index.get(key);
+    if (card) named.push(card);
+  }
+  if (!named.length) {
+    const reposNamed = knownRepos(board, repos);
+    for (const match of allMatches(SHORT_CARD_REF, text)) {
+      const tail = String(match[1] || '').toLowerCase();
+      const number = Number(match[2]);
+      const hits = reposNamed.filter(repo => repo.split('/').pop() === tail);
+      if (hits.length !== 1) continue;
+      const card = index.get(`${hits[0]}#${number}`);
+      if (card) named.push(card);
+    }
+  }
+  if (!named.length) {
+    const bare = bareCard(text, board);
+    if (bare.ambiguous) return null;
+    named.push(...(bare.cards || []));
+  }
+  const live = [];
+  const seen = new Set();
+  for (const card of named) {
+    if (!cardIsLive(card)) continue;
+    const key = workKey(card);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    live.push(card);
+  }
+  return live.length === 1 ? live[0] : null;
+}
+
+// A GitHub beat still closes every nudge. An activity beat closes only the seat that posted it.
+export function activityKeepsNudge(card, nudge) {
+  if (!card || !nudge) return false;
+  const act = Number(card.activity_at) || 0;
+  const last = Number(card.last_beat_t) || 0;
+  const beat = Number(nudge.beat_t) || 0;
+  if (!act || act < last || last === beat) return false;
+  const who = String(card.activity_seat || '').trim().toLowerCase();
+  const seat = String(nudge.seat || '').trim().toLowerCase();
+  return !!who && who !== seat;
+}
+
+function applyActivityBeats(cards, { activity = [], seats, now, board, repos, roles } = {}) {
+  const seatSet = seats instanceof Set ? seats : workSeatSet(seats);
+  const source = Array.isArray(board) ? board : cards;
+  const index = boardIndex(source);
+  const hits = new Map();
+  for (const line of activity || []) {
+    if (!line || typeof line !== 'object') continue;
+    const kind = String(line.kind || '').toLowerCase();
+    if (kind === 'cloud_agent' || kind === 'agent') continue;
+    if (line.by === 'server' && line.tag === 'wake') continue;
+    const id = activityLineId(line);
+    const seat = workSeat(line.seat, seatSet) || workSeat(line.by, seatSet);
+    const t = workAt(line);
+    if (!id || !seat || !t) continue;
+    const card = activityCard(line, source, repos, index);
+    if (!card || !seatTiedToCard(card, seat, seatSet, roles)) continue;
+    const key = workKey(card);
+    if (!key) continue;
+    const row = { id, seat, t, note: activityNote(line) };
+    const mine = hits.get(key) || [];
+    mine.push(row);
+    hits.set(key, mine);
+  }
+  if (!hits.size) return cards;
+  return (Array.isArray(cards) ? cards : []).map(card => {
+    if (!cardIsLive(card)) return card;
+    const mine = hits.get(workKey(card));
+    if (!mine || !mine.length) return card;
+    const beats = Array.isArray(card.beats) ? card.beats.slice() : [];
+    let activityAt = Number(card.activity_at) || 0;
+    let activitySeat = String(card.activity_seat || '');
+    let changed = false;
+    for (const hit of [...mine].sort((a, b) => a.t - b.t)) {
+      const id = 'act:' + hit.id;
+      if (hit.t >= activityAt) { activityAt = hit.t; activitySeat = hit.seat; }
+      if (beats.some(beat => beat && beat.id === id)) continue;
+      // /merge/ stays in note. what stays activity so the merged-beat check does not trip.
+      beats.push({ t: hit.t, what: 'activity', via: 'activity', seat: hit.seat, id, note: hit.note });
+      changed = true;
+    }
+    const prev = Number(card.last_beat_t) || 0;
+    const last = Math.max(prev, activityAt);
+    const stall = Number.isFinite(now) ? now - last >= ACTIVITY_STALL_MS : false;
+    const same = !changed && card.activity_at === activityAt && card.activity_seat === activitySeat
+      && card.last_beat_t === last && card.stall === stall;
+    if (same) return card;
+    beats.sort((a, b) => (Number(a && a.t) || 0) - (Number(b && b.t) || 0));
+    return { ...card, beats, last_beat_t: last, stall, activity_at: activityAt, activity_seat: activitySeat };
+  });
+}
+
 /**
  * A cloud launch or reply, or a handoff, moves an open card to in_progress.
  * The owner is the latest seat on a handoff, cloud line, or receipt.
  * builder-cloud is a label: the seat is the one that owns that bc-.
+ * A seat activity line beats a live card only when that seat is tied to the card.
  */
-export function stampWorkCards(cards, { activity = [], lines = [], comments = [], agents = [], seats = [] } = {}) {
+export function stampWorkCards(cards, { activity = [], lines = [], comments = [], agents = [], seats = [], now, board, repos, roles } = {}) {
   const seatSet = workSeatSet(seats);
   const hits = [];
   const note = (ref, seat, t, kind) => {
@@ -890,7 +1098,7 @@ export function stampWorkCards(cards, { activity = [], lines = [], comments = []
     const ref = row.repo && row.number != null ? `${row.repo}#${row.number}` : (row.card || row.key);
     note(ref, seat, workAt(row), 'receipt');
   }
-  return (Array.isArray(cards) ? cards : []).map((card) => {
+  const stamped = (Array.isArray(cards) ? cards : []).map((card) => {
     if (!card || typeof card !== 'object') return card;
     const key = workKey(card);
     const mine = hits.filter((hit) => hit.key === key);
@@ -908,6 +1116,7 @@ export function stampWorkCards(cards, { activity = [], lines = [], comments = []
     if (nextStage === card.stage && nextOwner === card.owner) return card;
     return { ...card, stage: nextStage, owner: nextOwner };
   });
+  return applyActivityBeats(stamped, { activity, seats: seatSet, now, board: board || cards, repos, roles });
 }
 
 export function foldCloudIds(rows) {
@@ -1108,18 +1317,22 @@ function agentItems(agents) {
   return items;
 }
 
-export function deriveTrack({ lines, acks, wakes, agents, now, windowMs, closedKeys }) {
+export function deriveTrack({ lines, acks, wakes, agents, now, windowMs, closedKeys, openKeys }) {
   const woken = wokenIds(wakes);
   const closed = closedKeys instanceof Set ? closedKeys : new Set(closedKeys || []);
+  const aged = openKeys != null;
+  const open = openKeys instanceof Set ? openKeys : new Set(openKeys || []);
   const items = [];
   for (const line of lines || []) {
     if (!isPacket(line)) continue;
     const seat = String(line.seat || '').toLowerCase();
     const key = String(line.repo || '').toLowerCase() + '#' + Number(line.number);
+    const acked = lineAcked(acks || {}, seat, line.id);
+    const gone = aged && acked && !open.has(key) && !closed.has(key);
     items.push(packetItem(line, {
-      acked: lineAcked(acks || {}, seat, line.id),
+      acked,
       woken: woken.has(line.id),
-      closed: closed.has(key),
+      closed: closed.has(key) || gone,
       now,
       windowMs,
     }));
@@ -1137,7 +1350,7 @@ export function deriveTrack({ lines, acks, wakes, agents, now, windowMs, closedK
   return { items, overdue: items.filter(item => item.overdue).map(item => item.id), lanes };
 }
 
-export function deriveTrackFromDir(dir, now, windowMs, closedKeys) {
+export function deriveTrackFromDir(dir, now, windowMs, closedKeys, openKeys) {
   return deriveTrack({
     lines: readInboxLines(dir),
     acks: readAcks(dir),
@@ -1146,6 +1359,7 @@ export function deriveTrackFromDir(dir, now, windowMs, closedKeys) {
     now,
     windowMs,
     closedKeys,
+    openKeys,
   });
 }
 

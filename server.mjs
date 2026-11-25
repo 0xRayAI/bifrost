@@ -21,8 +21,8 @@ import { checkRoutesFromDir, readRoutingMap, createLoginResolver, auditLogins, r
 import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallSeats, stallMove, isClockNudge, unackedWorkCount, planStallWakes, loadStallFired, dumpStallFired, applyLineNudge, clearStallFired } from './governor.mjs';
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
-import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking, escalateTarget, wakeUnreachable } from './wake-gate.mjs';
+import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, activityKeepsNudge, toToken } from './worktrack.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking, escalateTarget, pickLiveSeat, wakeUnreachable } from './wake-gate.mjs';
 import { readWakeFilter, allowWake, owedSeat, commitWake, readyPacket, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
@@ -1379,8 +1379,23 @@ function nudgeLines(now) {
     const mine = nudges.filter(n => n.kind === 'line' && n.line_key === base);
     const last = mine[mine.length - 1];
     const lvl = nextLineNudge(lineNudgeLevel.get(base), mine.length);
-    if (!lvl || (last && now - last.t < NUDGE_LINE_MS)) continue;
+    const down = seatDown(seat, now);
+    if ((!lvl && !down) || (lvl && last && now - last.t < NUDGE_LINE_MS)) continue;
     if (!wakeAllowed(fleetMode.mode, lineCard(l) || l)) continue;
+    if (!lvl && down) {
+      const held = findInboxLine(l.id);
+      if (held && held.seat === seat) escalateLine(seat, l, 'seat down');
+      continue;
+    }
+    if (down) {
+      const next = escalateLine(seat, l, 'seat down');
+      if (next) {
+        lineNudgeLevel.set(base, lvl);
+        persistLineNudgeLevels();
+        changed = true;
+        continue;
+      }
+    }
     if (lvl >= 2) {
       const next = escalateLine(seat, l, 'no answer');
       if (next) {
@@ -2037,23 +2052,142 @@ function retouchNudge(n) {
   saveSeatInbox(seat);
 }
 // Repos in NO_NUDGE_REPOS (unset means none) are shown and never nudged. A held card raises no nudge.
-function boardWorkSources() {
+function boardWorkSources(now = Date.now()) {
   const lines = [];
   for (const seat of Object.keys(seatInbox)) {
     for (const line of seatInbox[seat] || []) lines.push(line);
   }
   let agents = [];
   try { agents = cloudAgentBoard(); } catch { agents = []; }
+  const repos = [];
+  for (const card of bfCards) {
+    const repo = String(card && card.repo || '').trim().toLowerCase();
+    if (repo && !repos.includes(repo)) repos.push(repo);
+  }
   return {
     activity,
     lines,
     comments: githubEvents(),
     agents,
     seats: SEAT_IDS,
+    now,
+    board: bfCards,
+    repos,
+    roles: handoffConfig(),
   };
 }
+function presenceClock(seat) {
+  const id = canonSeat(seat);
+  if (!id) return 0;
+  let last = 0;
+  const touched = seatTouch[id];
+  if (Number.isFinite(touched)) last = touched;
+  const row = header && header.fleet && header.fleet.seats && header.fleet.seats[id];
+  const seen = Date.parse(row && row.last_ct || '');
+  if (Number.isFinite(seen)) last = Math.max(last, seen);
+  return last;
+}
+function forcedOffline(seat, now = Date.now()) {
+  const id = canonSeat(seat);
+  if (!id || !Array.isArray(activity)) return false;
+  let off = 0;
+  let touch = 0;
+  for (const line of activity) {
+    if (!line || canonSeat(line.seat) !== id) continue;
+    if (line.by === 'server' && line.tag === 'wake') continue;
+    const t = Date.parse(line.t_ct || '');
+    if (!Number.isFinite(t) || t > now + 300000) continue;
+    if (line.kind === 'turn' && line.action === 'offline') off = Math.max(off, t);
+    else touch = Math.max(touch, t);
+  }
+  const read = seatTouch[id] || 0;
+  if (Number.isFinite(read) && read > off) return false;
+  return off > 0 && off >= touch;
+}
+// Arch1 stays eligible unless the seat marks itself offline. The inbox is how that seat hears.
+function seatDown(seat, now = Date.now()) {
+  const id = canonSeat(seat);
+  if (!id) return false;
+  if (forcedOffline(id, now)) return true;
+  if (seatUnreachable(id)) return true;
+  if (id === 'arch1') return false;
+  const last = presenceClock(id);
+  if (!last) return false;
+  const row = header && header.fleet && header.fleet.seats && header.fleet.seats[id];
+  const working = !!(row && (row.working || row.working_on));
+  return seatStatus({ last_ct: new Date(last).toISOString(), working }, now, WINDOW_MIN * 60000) === 'offline';
+}
+function routeFallbackSeat() {
+  const roles = handoffConfig();
+  const name = canonSeat(roles && roles.fallback && roles.fallback.seat);
+  return name && SEAT_IDS.includes(name) ? name : '';
+}
+function liveSeat(seat, now = Date.now()) {
+  const id = canonSeat(seat);
+  if (!id) return '';
+  if (!seatDown(id, now)) return id;
+  const next = pickLiveSeat(id, SEAT_IDS, name => seatDown(name, now));
+  if (next) return next;
+  const fallback = routeFallbackSeat();
+  if (fallback && !seatDown(fallback, now)) return fallback;
+  return id;
+}
+function offerRouteLine(card, from, next, now) {
+  const key = String(card && card.key || '').trim().toLowerCase();
+  if (!key || !next || !seatInbox[next]) return false;
+  const id = `route:${key}`;
+  const prior = findInboxLine(id);
+  if (prior && prior.seat === next) return false;
+  const reason = `escalated from ${from}: webhook or seat down`.slice(0, 300);
+  const stored = {
+    id, t_ct: ctStamp(now), seat: next, type: 'issue_open',
+    repo: String(card.repo || ''), number: Number.isInteger(card.number) ? card.number : (Number.isInteger(Number(card.number)) ? Number(card.number) : 0),
+    title: String(card.title || '').slice(0, 120), url: String(card.url || '').slice(0, 300), reason,
+  };
+  if (prior) {
+    commitInboxMove(
+      { [next]: seatInbox[next] || [], [prior.seat]: seatInbox[prior.seat] || [] },
+      { ...prior.line, seat: next, reason },
+      (seat, rows) => { seatInbox[seat] = rows; saveSeatInbox(seat); },
+    );
+  } else {
+    seatInbox[next].push(stored);
+    saveSeatInbox(next);
+  }
+  process.stdout.write(`wake: route ${from} -> ${next} ${id.slice(0, 80)}\n`);
+  return true;
+}
+function routeDownCards(now) {
+  let changed = false;
+  for (const card of bfCards) {
+    if (!card || card.pinned || card.waiting || card.state !== 'live') continue;
+    const from = owningSeat(card) || seatIdOf(card.owner);
+    if (!from || !seatDown(from, now)) continue;
+    const next = liveSeat(from, now);
+    if (!next || next === from) continue;
+    if (offerRouteLine(card, from, next, now)) changed = true;
+    if (seatIdOf(card.owner) !== next) { card.owner = next; changed = true; }
+  }
+  return changed;
+}
+function dropClosedNudgeLines() {
+  const closed = new Set();
+  for (const nudge of nudges) if (nudge && nudge.closed_at && nudge.id) closed.add(String(nudge.id));
+  if (!closed.size) return false;
+  let changed = false;
+  for (const seat of Object.keys(seatInbox)) {
+    const rows = seatInbox[seat];
+    if (!Array.isArray(rows)) continue;
+    const kept = rows.filter(line => !(line && closed.has(String(line.id))));
+    if (kept.length === rows.length) continue;
+    seatInbox[seat] = kept;
+    saveSeatInbox(seat);
+    changed = true;
+  }
+  return changed;
+}
 function evalNudges(now = Date.now()) {
-  bfCards = stampWorkCards(bfCards, boardWorkSources());
+  bfCards = stampWorkCards(bfCards, boardWorkSources(now));
   let changed = applyStartAfter(now); const byKey = new Map(bfCards.map(c => [c.key, c]));
   for (const n of nudges) {
     if (n.closed_at || ['silent', 'line', 'unrouted', 'quiet', 'handoff'].includes(n.kind) || (n.kind === 'reassign' && (n.line_key || String(n.id || '').includes(':handoff:')))) continue;
@@ -2065,8 +2199,9 @@ function evalNudges(now = Date.now()) {
       if (!c || c.state !== 'held' || c.last_beat_t !== n.beat_t) { n.closed_at = new Date(now).toISOString(); changed = true; }
       continue;
     }
-    if (!c || c.state !== 'live' || c.waiting || c.last_beat_t !== n.beat_t) { n.closed_at = new Date(now).toISOString(); changed = true; }
+    if (!c || c.state !== 'live' || c.waiting || (c.last_beat_t !== n.beat_t && !activityKeepsNudge(c, n))) { n.closed_at = new Date(now).toISOString(); changed = true; }
   }
+  if (routeDownCards(now)) changed = true;
   for (const c of bfCards) {
     if (isPlanCard(c)) continue;   // the plan card is the tripwire's, and its beat is refreshed by the scheduler
     if (cardNoNudge(c) || itemClosed(c.repo, c.number)) continue;   // closed / merged PRs and issues are never nudged
@@ -2088,7 +2223,9 @@ function evalNudges(now = Date.now()) {
       title: String(c.title || '').slice(0, 120), url: String(c.url || '').slice(0, 300), stage: c.stage || '', level: lvl, seat, via, beat_t: c.last_beat_t }); changed = true;
       deliverNudge(nudges[nudges.length - 1]); };
     const to = seatIdOf(c.nudge_to), nx = to || seatIdOf((c.packet || {})['next owner']);
-    const tgt = nx || seatIdOf(c.owner) || cosSeat(), via = to ? (c.nudge_via || 'retest owner') : nx ? 'next owner' : 'card owner';
+    const named = nx || seatIdOf(c.owner) || cosSeat();
+    const tgt = liveSeat(named, now) || named;
+    const via = tgt !== named ? 'escalated' : to ? (c.nudge_via || 'retest owner') : nx ? 'next owner' : 'card owner';
     if (headHandled(tgt, c)) {
       for (const n of nudges) {
         if (n.closed_at || n.card !== c.key || n.beat_t !== c.last_beat_t) continue;
@@ -2123,6 +2260,7 @@ function evalNudges(now = Date.now()) {
   if (nudgeLines(now)) changed = true;
   if (nudgeSeats(now)) changed = true;
   if (evalHandoffs(now)) changed = true;
+  if (dropClosedNudgeLines()) changed = true;
   if (changed) saveNudges();
   return changed;
 }
@@ -2185,8 +2323,9 @@ function evalHandoffs(now) {
   const due = missingHandoffs({ events: feedEvents(), lines: inboxPackets(), roles: handoffConfig(), loginToSeat: loginMap(), now, l1ms: NUDGE_L1_MS });
   const open = new Set();
   for (const ob of due) {
-    if (!SEAT_IDS.includes(ob.owes)) continue;
     if (lineHandled(ob.owes, { repo: ob.repo, number: ob.number, sha: ob.sha, kind: ob.kind })) continue;
+    const owes = liveSeat(ob.owes, now) || ob.owes;
+    if (!SEAT_IDS.includes(owes)) continue;
     const held = bfCards.find(c => c && (c.key === ob.key || (String(c.repo || '').toLowerCase() === String(ob.repo || '').toLowerCase() && Number(c.number) === Number(ob.number))));
     if (held && startIsFuture(held, now)) continue;
     if (!wakeAllowed(fleetMode.mode, held || { title: '', repo: ob.repo, number: ob.number })) continue;
@@ -2194,23 +2333,23 @@ function evalHandoffs(now) {
     open.add(base);
     if (!nudges.some(n => n.id === base)) {
       nudges.push({ id: base, kind: 'handoff', t: now, t_ct: ctStamp(now), card: ob.key, repo: ob.repo, number: ob.number,
-        title: `handoff missing ${ob.kind}`.slice(0, 120), url: '', stage: '', level: 1, seat: ob.owes, via: 'handoff missing', beat_t: ob.since, sha: ob.sha, flag: 'handoff missing' });
+        title: `handoff missing ${ob.kind}`.slice(0, 120), url: '', stage: '', level: 1, seat: owes, via: owes === ob.owes ? 'handoff missing' : 'escalated', beat_t: ob.since, sha: ob.sha, flag: 'handoff missing' });
       changed = true;
-      noteWake(ob.owes, { id: base, type: 'nudge', kind: ob.kind, repo: ob.repo, number: ob.number, title: 'handoff missing', reason: `handoff missing ${ob.kind}`, sha: ob.sha });
+      noteWake(owes, { id: base, type: 'nudge', kind: ob.kind, repo: ob.repo, number: ob.number, title: 'handoff missing', reason: `handoff missing ${ob.kind}`, sha: ob.sha });
     }
     const l1 = nudges.find(n => n.id === base && !n.closed_at);
     const l2id = `${base}:L2`;
     if (l1 && !nudges.some(n => n.id === l2id) && now - l1.t >= NUDGE_L2_MS) {
-      nudges.push({ ...l1, id: l2id, t: now, t_ct: ctStamp(now), level: 2, seat: ob.owes, via: 'escalation' });
+      nudges.push({ ...l1, id: l2id, t: now, t_ct: ctStamp(now), level: 2, seat: owes, via: 'escalation' });
       changed = true;
-      noteWake(ob.owes, { id: l2id, type: 'nudge', kind: ob.kind, repo: ob.repo, number: ob.number, title: 'handoff missing', reason: `nudge L2: handoff missing ${ob.kind}`, sha: ob.sha });
+      noteWake(owes, { id: l2id, type: 'nudge', kind: ob.kind, repo: ob.repo, number: ob.number, title: 'handoff missing', reason: `nudge L2: handoff missing ${ob.kind}`, sha: ob.sha });
     }
     const l2 = nudges.find(n => n.id === l2id && !n.closed_at);
     if (l2 && now - l2.t >= NUDGE_L3_MS) {
       const id = `${base}:L3`;
       const row = nudges.find(n => n.id === id && !n.closed_at);
       if (!row) {
-        nudges.push({ ...l2, id, t: now, t_ct: ctStamp(now), level: 3, seat: ob.owes, via: 'repeat' });
+        nudges.push({ ...l2, id, t: now, t_ct: ctStamp(now), level: 3, seat: owes, via: 'repeat' });
         changed = true;
       } else if (now - row.t >= NUDGE_L3_MS) {
         row.t = now; row.t_ct = ctStamp(now); changed = true;
@@ -2274,7 +2413,7 @@ function cardsView(list = bfCards) {   // cards with their nudges as distinct nu
   const by = new Map(); for (const n of nudges) { if (!by.has(n.card)) by.set(n.card, []); by.get(n.card).push(n); }
   const missing = new Set(nudges.filter(n => n.kind === 'handoff' && !n.closed_at).map(n => n.card));
   return list.map(c => {
-    const ns = (by.get(c.key) || []).filter(n => n.kind === 'handoff' || n.beat_t === c.last_beat_t);
+    const ns = (by.get(c.key) || []).filter(n => n.kind === 'handoff' || n.beat_t === c.last_beat_t || (!n.closed_at && activityKeepsNudge(c, n)));
     let card = c;
     if (ns.length) {
       const beats = keepPush([...(c.beats || []), ...ns.map(n => ({ t: n.t, what: n.kind === 'handoff' ? 'handoff missing' : `nudge L${n.level} → ${n.seat}`, nudge: true, level: n.level, seat: n.seat, id: n.id }))].sort((a, b) => a.t - b.t), 6);
@@ -2407,16 +2546,24 @@ function drainArch1Handoffs() {
     );
   }
 }
-function closedCardKeys() {
+function cardKeySet(wantClosed) {
   const keys = new Set();
   for (const c of bfCards) {
-    if (!c || String(c.state || '').toLowerCase() !== 'closed') continue;
+    if (!c) continue;
+    const closed = String(c.state || '').toLowerCase() === 'closed';
+    if (closed !== wantClosed) continue;
     keys.add(String(c.repo || '').toLowerCase() + '#' + Number(c.number));
   }
   return keys;
 }
+function closedCardKeys() {
+  return cardKeySet(true);
+}
+function openCardKeys() {
+  return cardKeySet(false);
+}
 function trackView(now) {
-  try { return deriveTrackFromDir(STATE_DIR, now, NUDGE_L1_MS, closedCardKeys()); }
+  try { return deriveTrackFromDir(STATE_DIR, now, NUDGE_L1_MS, closedCardKeys(), openCardKeys()); }
   catch (e) { console.log('track: ' + ((e && e.message) || 'read failed')); return { items: [], overdue: [], lanes: [] }; }
 }
 function activityCloudRows() {
@@ -2603,7 +2750,13 @@ function recentPromptSeats(now = Date.now()) {
 function stallOpenSeats(now = Date.now()) {
   const counts = {};
   for (const seat of SEAT_IDS) counts[seat] = unackedWorkCount(openLines(seat));
-  return selectStallSeats(SEAT_IDS, loadMutedSeats(), counts, recentPromptSeats(now));
+  const picked = selectStallSeats(SEAT_IDS, loadMutedSeats(), counts, recentPromptSeats(now));
+  const out = [];
+  for (const seat of picked) {
+    const next = liveSeat(seat, now);
+    if (next && !out.includes(next)) out.push(next);
+  }
+  return out;
 }
 function nudgeCoversOpen() {
   let nudge = false;
@@ -3816,7 +3969,7 @@ function validFeed(f) {
 
 // ---- activity (write-only from off-box seats; the box pusher pulls it with the ingest secret) ----
 // One JSON line: {t_ct, kind, action, to?, agent?, tag?}. The seat comes from the key, never from the body.
-const ACT_KINDS = { prompt: ['received', 'sent'], turn: ['start', 'end', 'tick'], subagent: ['start', 'end', 'tick'],
+const ACT_KINDS = { prompt: ['received', 'sent'], turn: ['start', 'end', 'tick', 'offline'], subagent: ['start', 'end', 'tick'],
   watcher: ['start', 'end', 'tick'], cloud_agent: ['launch', 'reply', 'finished', 'cancel'],
   agent: ['launch', 'reply', 'finish', 'cancel'] };
 const ACT_FIELDS = new Set(['t_ct', 'kind', 'action', 'to', 'from', 'agent', 'tag', 'seat', 'room', 'pr', 'note']);   // seat: optional, must match the token; from: prompt sender (#281); room: optional short name; pr: optional https GitHub pull URL; note: prompt line only
@@ -4012,6 +4165,7 @@ function applyStoredActivity(fleet, now) {
   for (const line of activity) {
     if (!line || typeof line.seat !== 'string') continue;
     if (line.by === 'server' && line.tag === 'wake') continue;   // a delivered wake is not presence
+    if (line.kind === 'turn' && line.action === 'offline') continue;   // an explicit offline mark is not presence
     if (line.kind === 'turn' && cloudTurnId(line.tag)) continue;   // bc-… track is the agent, not the seat
     const seat = line.seat.toLowerCase();
     if (!SEAT_IDS.includes(seat)) continue;
