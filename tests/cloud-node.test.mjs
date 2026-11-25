@@ -74,6 +74,38 @@ function loadMesh() {
   return L;
 }
 
+test('the first seat does not cover the owner', () => {
+  const live = fs.readFileSync(path.join(APP, 'public', 'live.js'), 'utf8');
+  const prev = globalThis.LiveMesh;
+  new Function(live)();
+  const seats = ['arch1', 'forge', 'critic', 'blinky', 'herald', 'nibbler', 'sound', 'magnet', 'mill', 'near']
+    .map(id => ({ id, role: 'seat' }));
+  function load(spec) {
+    globalThis.FLEET_SPEC = spec;
+    new Function('window', 'location', fs.readFileSync(path.join(APP, 'public', 'live-config.js'), 'utf8'))(globalThis, { search: '' });
+    new Function('window', fs.readFileSync(path.join(APP, 'public', 'site-config.js'), 'utf8'))(globalThis);
+    return globalThis.LiveMesh.SATS;
+  }
+  function dist(a, b) {
+    return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  }
+  const sats = load({ owner: 'Blaze', name: 'Bifrost', title: 'Bifrost', seats, layout: { sats: {} }, aliases: {} });
+  assert.ok(dist(sats.Blaze, sats.arch1) >= 80, 'arch1 covers Blaze');
+  assert.ok(dist(sats.Railway, sats.nibbler) >= 80, 'a seat covers Railway');
+  const ids = Object.keys(sats);
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      assert.ok(dist(sats[ids[i]], sats[ids[j]]) >= 50, `${ids[i]} covers ${ids[j]}`);
+    }
+  }
+  const placed = load({
+    owner: 'Blaze', name: 'Bifrost', title: 'Bifrost', seats: [{ id: 'arch1', role: 'seat' }],
+    layout: { sats: { arch1: [12, 34] } }, aliases: {},
+  });
+  assert.deepEqual(placed.arch1, [12, 34]);
+  if (prev) globalThis.LiveMesh = prev;
+});
+
 test('owner and a lowercase seat name draw on the mesh', () => {
   const live = fs.readFileSync(path.join(APP, 'public', 'live.js'), 'utf8');
   const prev = globalThis.LiveMesh;

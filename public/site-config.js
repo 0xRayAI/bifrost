@@ -21,9 +21,10 @@
   var drawn = (spec.seats || []).filter(function (s) { return s && s.id && !s.parked; });
   var sats = { GitHub: [460, 200], Railway: [460, 340], CloudAgents: [160, 300], Assistant: [760, 300] };
   if (owner) sats[owner] = [460, 48];
+  // The top of the ring is the owner. The bottom is Railway. A seat on the hour covers that node.
   drawn.forEach(function (s, i) {
     var n = drawn.length || 1;
-    var a = -Math.PI / 2 + (i * 2 * Math.PI / n);
+    var a = n === 1 ? 0 : (-Math.PI / 2 + ((i + 0.5) * 2 * Math.PI / n));
     sats[s.id] = [Math.round(460 + Math.cos(a) * 300), Math.round(200 + Math.sin(a) * 140)];
   });
   Object.keys(placed).forEach(function (k) {
