@@ -62,6 +62,14 @@ export function nextAgent(seat, seats) {
   return known.has('arch1') ? 'arch1' : '';
 }
 
+// The seat when it is up. Otherwise the next seat that is up. Arch1 is the end.
+export function pickLiveSeat(seat, seats, down) {
+  const id = String(seat || '').trim().toLowerCase();
+  const dead = typeof down === 'function' ? down : () => false;
+  if (id && !dead(id)) return id;
+  return escalateTarget(id, seats, dead);
+}
+
 // Walk past seats that are already down. Forge with a dead webhook lands on arch1.
 export function escalateTarget(seat, seats, unreachable) {
   const dead = new Set();

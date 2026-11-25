@@ -90,8 +90,18 @@
     return names;
   };
   function nodeKey(v, fallback) {
-    var k = Object.prototype.hasOwnProperty.call(NODE_KEY, v) ? NODE_KEY[v] : v;
-    return Object.prototype.hasOwnProperty.call(L.SATS, k) ? k : fallback;
+    var raw = v == null ? '' : String(v);
+    var lower = raw.toLowerCase();
+    var mapped = raw;
+    var keys = Object.keys(NODE_KEY);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] === raw || String(keys[i]).toLowerCase() === lower) { mapped = NODE_KEY[keys[i]]; break; }
+    }
+    var want = String(mapped == null ? '' : mapped);
+    if (Object.prototype.hasOwnProperty.call(L.SATS, want)) return want;
+    var sats = Object.keys(L.SATS);
+    for (var j = 0; j < sats.length; j++) if (sats[j].toLowerCase() === want.toLowerCase()) return sats[j];
+    return fallback;
   }
   // Hop list (feed names) -> drawn node keys; a hop that cannot be drawn is skipped, never crashes the page.
   function hopKeys(h) {

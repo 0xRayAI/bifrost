@@ -801,6 +801,23 @@ def _card_transitions(card, beats, by_id, merged, explicit_close, close_id):
     return rows
 
 
+def apply_thread_state(card, kind, when=0, event_id=None):
+    """One close and reopen write. A reopen clears the close. A close stamps it."""
+    name = str(kind or "")
+    if name.endswith("_reopen"):
+        card["_closed"] = False
+        card["_closed_t"] = 0
+        card["_stop"] = False
+        return "reopen"
+    if name in ("issue_close", "pr_close"):
+        card["_closed"] = True
+        card["_closed_t"] = when
+        if event_id is not None:
+            card["_close_id"] = str(event_id)
+        return "close"
+    return ""
+
+
 def model(extra_events=None, now=None, prompts=None, held=None):
     now = now or time.time()
     evs = _events(extra_events)
@@ -853,16 +870,11 @@ def model(extra_events=None, now=None, prompts=None, held=None):
         kept = keep_start_after(e.get("start_after"), e.get("from"), c.get("owner"), now)
         if kept:
             c["start_after"] = kept
-        if reopen:
-            c["_closed"], c["_closed_t"], c["_stop"] = False, 0, False
+        apply_thread_state(c, kind, _t(e), e.get("id"))
         if kind == "pr_draft":
             c["_draft_park"] = True
         elif kind == "pr_ready":
             c["_draft_park"] = False
-        if kind in ("issue_close", "pr_close"):
-            c["_closed"], c["_closed_t"] = True, _t(e)
-            if e.get("id") is not None:
-                c["_close_id"] = str(e["id"])
         w = beat_of(e)
         is_comment = e.get("kind") in ("pr_comment", "issue_comment", "pr_review", "review_comment")
         if is_comment and e.get("parked"):                 # Coord rule: a 'Parked:' comment parks the card (no nudges)

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextAgent, escalateTarget, wakeUnreachable } from '../wake-gate.mjs';
+import { nextAgent, escalateTarget, pickLiveSeat, wakeUnreachable } from '../wake-gate.mjs';
 
 const seats = ['blinky', 'critic', 'forge', 'arch1'];
 
@@ -10,6 +10,14 @@ test('forge falls through to arch1 and arch1 is the end of the chain', () => {
   assert.equal(nextAgent('arch1', seats), '');
   assert.equal(nextAgent('critic', seats), 'forge');
   assert.equal(nextAgent('forge', ['forge']), '');
+});
+
+test('a down seat walks to the next live seat and stays put when it is up', () => {
+  const down = id => id === 'forge';
+  assert.equal(pickLiveSeat('forge', seats, down), 'arch1');
+  assert.equal(pickLiveSeat('critic', seats, () => false), 'critic');
+  assert.equal(pickLiveSeat('arch1', seats, down), 'arch1');
+  assert.equal(pickLiveSeat('arch1', seats, id => id === 'arch1'), '');
 });
 
 test('a dead forge webhook lands on arch1, and a dead critic stops at a live forge', () => {

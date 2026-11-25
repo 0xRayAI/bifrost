@@ -2,7 +2,8 @@
 // The owner is the latest seat on that card. builder-cloud is not an owner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stampWorkCards } from '../worktrack.mjs';
+import { activityKeepsNudge, mentionedCard, stampWorkCards } from '../worktrack.mjs';
+import { project } from '../archive.mjs';
 
 const SEATS = ['mill', 'forge', 'eng', 'critic', 'arch1'];
 
@@ -115,4 +116,82 @@ test('builder-cloud maps to the seat that owns the bc, and a quiet card falls ba
   const [authored] = stampWorkCards([card({ owner: 'github', labels: ['forge'], stage: 'open' })], { seats: SEATS });
   assert.equal(authored.owner, 'forge');
   assert.equal(authored.stage, 'open');
+});
+
+const ROLES = { handoffs: { reviewer: 'critic' }, seats: { operator: { seat: 'forge' }, coord: { seat: 'blinky' } } };
+
+test('a tied seat activity beats the live card and does not move the owner', () => {
+  const now = Date.parse('2026-11-25T18:00:00Z');
+  const [beat] = stampWorkCards([card({ owner: 'arch1', beats: [], last_beat_t: now - 7200000, stall: true })], {
+    seats: SEATS,
+    now,
+    roles: ROLES,
+    activity: [{
+      id: 'a1', kind: 'turn', action: 'start', seat: 'arch1',
+      tag: 'merge 0xRayAI/clearing#39', t_ct: '2026-11-25T17:30:00Z',
+    }],
+  });
+  assert.equal(beat.owner, 'arch1');
+  assert.equal(beat.stage, 'open');
+  assert.equal(beat.beats.length, 1);
+  assert.equal(beat.beats[0].id, 'act:a1');
+  assert.equal(beat.beats[0].what, 'activity');
+  assert.equal(beat.beats[0].via, 'activity');
+  assert.equal(beat.beats[0].seat, 'arch1');
+  assert.match(beat.beats[0].note, /merge/i);
+  assert.equal(beat.stall, false);
+  assert.equal(beat.activity_seat, 'arch1');
+
+  const again = stampWorkCards([beat], {
+    seats: SEATS, now, roles: ROLES,
+    activity: [{ id: 'a1', kind: 'turn', action: 'start', seat: 'arch1', tag: '0xRayAI/clearing#39', t: now }],
+  });
+  assert.equal(again[0].beats.length, 1);
+});
+
+test('an unrelated seat, a closed card, and an ambiguous bare number stay seat-only', () => {
+  const now = Date.parse('2026-11-25T18:00:00Z');
+  const live = card({ owner: 'arch1', beats: [] });
+  const other = card({ key: '0xrayai/xray#39', repo: '0xRayAI/xray', number: 39, owner: 'mill', state: 'live', beats: [] });
+  const closed = card({ key: '0xrayai/bifrost#39', repo: '0xRayAI/bifrost', number: 39, owner: 'arch1', state: 'closed', beats: [] });
+  const [untied] = stampWorkCards([live], {
+    seats: SEATS, now, roles: ROLES, board: [live],
+    activity: [{ id: 'b1', kind: 'turn', action: 'tick', seat: 'mill', tag: '0xRayAI/clearing#39', t_ct: '2026-11-25T17:40:00Z' }],
+  });
+  assert.deepEqual(untied.beats, []);
+  const [shut] = stampWorkCards([closed], {
+    seats: SEATS, now, roles: ROLES,
+    activity: [{ id: 'b2', kind: 'turn', action: 'tick', seat: 'arch1', tag: '0xRayAI/bifrost#39', t_ct: '2026-11-25T17:40:00Z' }],
+  });
+  assert.deepEqual(shut.beats, []);
+  const ambiguous = stampWorkCards([live, other], {
+    seats: SEATS, now, roles: ROLES, board: [live, other, closed],
+    activity: [{ id: 'b3', kind: 'turn', action: 'tick', seat: 'arch1', tag: '#39', t_ct: '2026-11-25T17:45:00Z' }],
+  });
+  assert.deepEqual(ambiguous[0].beats, []);
+  assert.deepEqual(ambiguous[1].beats, []);
+});
+
+test('a handoff to the reviewer keeps the working seat as owner', () => {
+  const [kept] = stampWorkCards([card({ owner: 'mill', stage: 'open' })], {
+    seats: SEATS,
+    roles: ROLES,
+    lines: [{ type: 'packet', kind: 'ready', from: 'mill', to: 'critic', seat: 'critic', repo: '0xRayAI/clearing', number: 39, t_ct: '2026-11-25T17:00:00Z' }],
+  });
+  assert.equal(kept.owner, 'mill');
+});
+
+test('a prompt note names the card it belongs on', () => {
+  assert.deepEqual(mentionedCard('see 0xRayAI/xray#1263'), { repo: '0xRayAI/xray', number: 1263 });
+  assert.equal(mentionedCard('no card here'), null);
+  const kept = project('activity', { id: '1', seq: 1, seat: 'arch1', note: '0xRayAI/xray#1263', token: 'secret' });
+  assert.equal(kept.note, '0xRayAI/xray#1263');
+  assert.equal(kept.token, undefined);
+});
+
+test('an activity beat from another seat keeps that nudge open', () => {
+  const cardRow = { last_beat_t: 200, activity_at: 200, activity_seat: 'mill' };
+  assert.equal(activityKeepsNudge(cardRow, { beat_t: 100, seat: 'arch1' }), true);
+  assert.equal(activityKeepsNudge(cardRow, { beat_t: 100, seat: 'mill' }), false);
+  assert.equal(activityKeepsNudge({ last_beat_t: 300, activity_at: 200, activity_seat: 'mill' }, { beat_t: 100, seat: 'arch1' }), false);
 });

@@ -353,6 +353,15 @@ export function validMergeReview(url, line) {
   return Number(hit[3]) === numberOf(line);
 }
 
+// A merged pull keeps the URL in review. A pull that closed without merging is settled, not a review.
+export function ackMergeRecord(line, review, { merged = false, closed = false } = {}) {
+  if (!isMergeHandoff(line)) return {};
+  if (validMergeReview(review, line)) return { review };
+  if (merged) return { review: String(line.url || '') };
+  if (closed) return { settled: 'closed' };
+  return null;
+}
+
 export function hotfixMergeLine({ repo, number, sha, reviewer, from, t_ct }) {
   const raw = text(repo);
   if (!REPO_RE.test(raw)) return null;

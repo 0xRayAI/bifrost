@@ -170,6 +170,7 @@ test('a paused wake reports disabled, an old fail reports stale, and a bare http
     { seat: 'herald', id: 'w-herald', t_ct: now.toISOString(), ok: true, attempts: 1, outcome: 'delivered' },
     { seat: 'arch1', id: 'w-arch1', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'http_400', detail: "Automation 'x' is disabled" },
     { seat: 'near', id: 'w-near', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'http_400' },
+    { seat: 'mill', id: 'w-mill', t_ct: now.toISOString(), ok: false, attempts: 3, outcome: 'failed', error: 'network', detail: 'worker disabled' },
   ];
   fs.writeFileSync(path.join(data, 'live', 'wakes.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
   const srv = start(data, {
@@ -189,9 +190,10 @@ test('a paused wake reports disabled, an old fail reports stale, and a bare http
       herald: 'ok',
       arch1: 'disabled',
       near: 'fail',
-      mill: 'idle',
+      mill: 'fail',
       nibbler: 'no_key',
     });
+    assert.equal(body.wakes_at.forge, rows[0].t_ct);
   } finally {
     await stop(srv.child);
     fs.rmSync(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });

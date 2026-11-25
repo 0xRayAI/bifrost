@@ -69,6 +69,10 @@
   var aliases = spec.aliases || {};
   L.SEAT_ALIAS = aliases;
   Object.keys(aliases).forEach(function (from) { if (aliases[from]) NK[from] = aliases[from]; });
+  if (owner) {
+    NK.owner = owner;
+    NK[owner.toLowerCase()] = owner;
+  }
 
   L.OUTSIDE_SEATS = {};
   (spec.seats || []).forEach(function (s) { if (s && s.outside && s.id) L.OUTSIDE_SEATS[s.id] = 1; });
