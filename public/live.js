@@ -225,7 +225,6 @@
   function turnWord(e) {
     var blob = String((e && e.label || '') + ' ' + (e && e.tag || '') + ' ' + (e && e.note || ''));
     if (/\b(end|ended|finish|finished)\b/i.test(blob)) return 'finished';
-    if (/\b(start|started)\b/i.test(blob)) return 'started';
     return 'working';
   }
   function kindWord(e) {
@@ -520,14 +519,22 @@
     }, function () { return fallback(1); });
   }
 
-  /* Empty logo keeps the 0xRay wordmark. A fleet calls setBrand({ logo, alt, byline }). */
-  var brand = { logo: '', alt: 'Fleet', byline: '' };
+  /* Empty logo keeps the 0xRay wordmark. A fleet calls setBrand({ logo, logoDark, logoLight, alt, byline }). */
+  var brand = { logo: '', logoDark: '', logoLight: '', alt: 'Fleet', byline: '' };
   function setBrand(opts) {
     opts = opts || {};
     if (opts.logo != null) brand.logo = String(opts.logo);
+    if (opts.logoDark != null) brand.logoDark = String(opts.logoDark);
+    if (opts.logoLight != null) brand.logoLight = String(opts.logoLight);
     if (opts.alt != null) brand.alt = String(opts.alt);
     if (opts.byline != null) brand.byline = String(opts.byline);
     return brand;
+  }
+  function brandLogo(theme) {
+    var light = theme === 'light';
+    if (light && brand.logoLight) return brand.logoLight;
+    if (!light && brand.logoDark) return brand.logoDark;
+    return brand.logo || '';
   }
 
   root.LiveMesh = {
@@ -538,7 +545,7 @@
     eventsUpTo: eventsUpTo, pingsAt: pingsAt, hotNodes: hotNodes, applyFeed: applyFeed,
     bounds: bounds, fmtCt: fmtCt, ago: ago, feedUrl: feedUrl, fetchFeed: fetchFeed, shellNotice: shellNotice, rosterEntries: rosterEntries,
     own: own, botImage: botImage, badgeLetter: badgeLetter, bob: bob, pulse: pulse, entry: entry,
-    ENTRY_MS: ENTRY_MS, PULSE_MS: PULSE_MS, MARK: MARK, markCells: markCells, brand: brand, setBrand: setBrand,
+    ENTRY_MS: ENTRY_MS, PULSE_MS: PULSE_MS, MARK: MARK, markCells: markCells, brand: brand, setBrand: setBrand, brandLogo: brandLogo,
     isPlaying: isPlaying, sliderAction: sliderAction, edgeTraffic: edgeTraffic, orbitStep: orbitStep,
     spectrumEnabled: spectrumEnabled, spectrumShows: spectrumShows, spectrumMeter: spectrumMeter,
     spectrumTrail: spectrumTrail, packetCore: packetCore, aspectFit: aspectFit,
