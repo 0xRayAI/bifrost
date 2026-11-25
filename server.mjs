@@ -22,7 +22,7 @@ import { fingerprint, tripwire, createClock, wakeTitle, mutedSeats, selectStallS
 import { acceptWaveCards, applyBrief, attachPacketCards, burnQuiet, faceFromGithubIssue, handoffLabel, isPacketBorn, isPlanCard, liveWorkCount, packetCardFace, postedCards, restoreHandoffFace, retainSeedCards, resolveWaveSeed, scheduleWaves } from './wave-schedule.mjs';
 import { createArch1Launch, ARCH1_CANON, cardKeyOf } from './arch1-launch.mjs';
 import { configureWorkTrack, acceptCursorWebhook, appendWake, applyCloudOwners, boardCloudAgents, canonSeatToken, cloudIdsAlias, cloudTurnId, deriveTrackFromDir, displaySeat, isPacket, loadSeatAgentMap, openCloudTurns, readJsonl, readWakeRows, safePrUrl, seatForAgentId, stampCloudMesh, stampCriticCloud, stampWorkCards, toToken } from './worktrack.mjs';
-import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking } from './wake-gate.mjs';
+import { wakeConfig, createWakeState, classifyBatch, gateLine, recordFlush, releaseDue, releaseForTurn, publicStats, fullStats, restoreWakeBook, viewLine, defaultIssueSeat, actorSeat, dumpBreaker, restoreBreaker, loadWoken, dumpWoken, nextLineNudge, releaseWaking, escalateTarget, wakeUnreachable } from './wake-gate.mjs';
 import { readWakeFilter, allowWake, owedSeat, commitWake, readyPacket, greenSeen, rememberGreen, dumpGreenHeads, restoreGreenHeads, lineClosed, createCriticHeads } from './wake-filter.mjs';
 import { appendDoorbell, criticHeads, loadChatDoorbells, postSeatMessage, seatMessage } from './chat-doorbell.mjs';
 const COLLECTOR_DIR_EARLY = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'collector');
@@ -510,9 +510,57 @@ function wakeFilterConfig() {
   } catch { /* the env var still decides */ }
   return readWakeFilter(process.env, roster);
 }
+function seatUnreachable(seat) {
+  const id = canonSeat(seat);
+  if (!id || !SEAT_WEBHOOKS[id]) return false;
+  const health = wakeHealth()[id];
+  return health === 'disabled' || health === 'no_key' || health === 'fail';
+}
+function escalateLine(from, line, why) {
+  if (!line || typeof line !== 'object') return '';
+  const type = String(line.type || line.kind || '').toLowerCase();
+  if (!type || type === 'nudge' || String(line.id || '').startsWith('nudge:')) return '';
+  const src = canonSeat(from || line.seat);
+  if (src && String(line.reason || '').startsWith(`escalated from ${src}:`)) return '';
+  if (!src) return '';
+  const next = escalateTarget(src, SEAT_IDS, seatUnreachable);
+  const id = String(line.id || '').trim();
+  if (!next || next === src || !seatInbox[next] || !id) return '';
+  const reason = `escalated from ${src}: ${why}`.slice(0, 300);
+  const prior = findInboxLine(id);
+  if (prior && prior.seat === next) return next;
+  if (prior) {
+    commitInboxMove(
+      { [next]: seatInbox[next] || [], [prior.seat]: seatInbox[prior.seat] || [] },
+      { ...prior.line, seat: next, reason },
+      (seat, rows) => { seatInbox[seat] = rows; saveSeatInbox(seat); },
+    );
+  } else {
+    const stored = {
+      id, t_ct: typeof line.t_ct === 'string' && line.t_ct ? line.t_ct : new Date().toISOString(),
+      seat: next, type: String(line.type || line.kind || 'issue_open'),
+      repo: String(line.repo || ''), number: Number.isInteger(line.number) ? line.number : 0,
+      title: String(line.title || '').slice(0, 120), url: String(line.url || ''), reason,
+    };
+    if (typeof line.sha === 'string' && line.sha) stored.sha = line.sha;
+    seatInbox[next].push(stored);
+    saveSeatInbox(next);
+  }
+  recordSkip(src, line, 'escalated');
+  process.stdout.write(`wake: escalate ${src} -> ${next} ${id.slice(0, 80)}\n`);
+  if (SEAT_WEBHOOKS[next] && !seatUnreachable(next)) {
+    const moved = findInboxLine(id);
+    enqueuePending(next, moved ? moved.line : { ...line, seat: next, reason });
+  }
+  return next;
+}
 function enqueuePending(seat, line) {
   const id = canonSeat(seat);
-  if (!id || !SEAT_WEBHOOKS[id] || !line) return;
+  if (!id || !line) return;
+  if (seatUnreachable(id)) {
+    if (escalateLine(id, line, 'webhook unreachable')) return;
+  }
+  if (!SEAT_WEBHOOKS[id]) return;
   let st = wakeQ.get(id);
   if (!st) { st = { lastSent: 0, pending: [], timer: null, inflight: false, status: null }; wakeQ.set(id, st); }
   st.pending.push(viewLine(line));
@@ -860,6 +908,9 @@ async function flushWake(seat) {
       wakeOkAt[seat] = st.status.at; persistWakeOk();
       serverActivity(seat, 'turn', 'start', 'wake', { moves: false });
     } else releaseWaking(wakeState, seat, batch);
+    if (!result.ok && wakeUnreachable(st.status)) {
+      for (const line of batch) escalateLine(seat, line, st.status.error || 'webhook unreachable');
+    }
   }
   st.inflight = false;
   const last = batch[batch.length - 1] || {};
@@ -1330,6 +1381,15 @@ function nudgeLines(now) {
     const lvl = nextLineNudge(lineNudgeLevel.get(base), mine.length);
     if (!lvl || (last && now - last.t < NUDGE_LINE_MS)) continue;
     if (!wakeAllowed(fleetMode.mode, lineCard(l) || l)) continue;
+    if (lvl >= 2) {
+      const next = escalateLine(seat, l, 'no answer');
+      if (next) {
+        lineNudgeLevel.set(base, lvl);
+        persistLineNudgeLevels();
+        changed = true;
+        continue;
+      }
+    }
     const stamped = ctStamp(now);
     const applied = applyLineNudge(seatInbox[seat], l.id, { level: lvl, t_ct: stamped, woken: stallFired });
     if (!applied.line) continue;
