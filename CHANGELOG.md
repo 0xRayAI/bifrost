@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The header mark follows dark and light. A fleet can pass `logoDark` and `logoLight`.
+- The date above the mesh is gone. The clock under the mesh stays.
+- The legend shows a work dot, a person circle, and a link square.
+- A turn says working or finished. It does not say started.
+- The Mesh fold is gone. The roster stays. Seen and working sit on the mesh.
 - A seat on the ring no longer covers the owner. The top of the ring stays the owner. The bottom stays Railway.
 
 ## 1.0.0 — 2026-11-25

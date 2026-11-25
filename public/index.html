@@ -412,7 +412,13 @@ button.seat { background: transparent; border: 0; padding: 0; color: inherit; fo
 .seat.live .role { color: var(--text); }
 .lens-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dim); align-items: center; }
 #head { color: var(--teal); font-weight: 700; font-size: 15px; }
-#headTime { color: var(--dim); font-size: 12px; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.legend { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.lg-dot, .lg-circle, .lg-square { display: inline-block; flex: none; box-sizing: border-box; }
+.lg-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--teal); }
+.lg-circle { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--text); }
+.lg-square { width: 12px; height: 12px; border: 2px solid var(--text); }
+.mesh-counts { margin-left: auto; }
 canvas { display: block; width: 100%; height: auto; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 #meshPanel { display: flex; flex-direction: column; height: 720px; max-height: 720px; overflow: hidden; min-height: 0; }
@@ -622,20 +628,21 @@ footer a { color: var(--foot); }
   </div>
 
   <div class="split">
-  <section class="panel fold" id="meshPanel" data-fold="mesh">
-    <button class="fold-head" type="button" aria-expanded="true"><span>Mesh</span><span class="fold-sum" id="meshSum"></span></button>
+  <section class="panel" id="meshPanel">
     <section class="seats fold" id="seats" data-fold="roster" aria-label="Seats">
       <button class="fold-head" type="button" aria-expanded="true"><span>Roster</span><span class="fold-sum" id="rosterSum"></span></button>
       <div class="fold-body" id="seatGrid"></div>
     </section>
-    <div class="fold-body">
     <div class="lens-head">
-      <span class="legend">dots = work · circles = people · squares = links</span>
+      <span class="legend">
+        <span class="lg"><i class="lg-dot" aria-hidden="true"></i> work</span>
+        <span class="lg"><i class="lg-circle" aria-hidden="true"></i> people</span>
+        <span class="lg"><i class="lg-square" aria-hidden="true"></i> links</span>
+      </span>
+      <span class="mesh-counts" id="meshCounts"></span>
     </div>
     <div id="head">&nbsp;</div>
-    <div id="headTime">&nbsp;</div>
     <canvas id="mesh" width="920" height="400" aria-label="People and the links between them, with work moving"></canvas>
-    </div>
     <div class="controls mesh-controls" aria-label="Timeline">
       <button id="play" type="button" title="Play / pause the replay (Live plays in real time; click the timeline to replay from there)">&#9654; Play</button>
       <select id="speed" aria-label="Replay speed">
@@ -764,11 +771,12 @@ footer a { color: var(--foot); }
     imgs[k] = img;
   });
 
-  // 0xRay wordmark, or a fleet image from setBrand (never the stamp PNG)
-  (function drawMark() {
+  // 0xRay wordmark, or a fleet image from setBrand. The mark repaints when the theme changes.
+  function drawMark() {
     var mc = $('mark');
     var img = $('fleetLogo');
-    var logo = L.brand && L.brand.logo;
+    var theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+    var logo = L.brandLogo ? L.brandLogo(theme) : (L.brand && L.brand.logo);
     var by = $('byline');
     if (by && L.brand && L.brand.byline) { by.textContent = L.brand.byline; by.hidden = false; }
     if (logo && img) {
@@ -787,7 +795,8 @@ footer a { color: var(--foot); }
     cells.forEach(function (row, y) {
       row.forEach(function (v, x) { if (v) { mx.fillStyle = ink[v]; mx.fillRect(x, y, 1.02, 1.02); } });
     });
-  })();
+  }
+  drawMark();
 
   function rgb(c, a) { return a == null ? 'rgb(' + c.join(',') + ')' : 'rgba(' + c.join(',') + ',' + a + ')'; }
   function cssVar(name) {
@@ -882,7 +891,7 @@ footer a { color: var(--foot); }
     var sum = $('rosterSum'); if (sum) sum.textContent = String(L.AGENTS.length);
   }
   paintRoster(L.AGENTS.map(function (a) { return [a[0], a[1] || '']; }));
-  var meshSum = $('meshSum'); if (meshSum) meshSum.textContent = String(Object.keys(L.SATS).length);
+
 
   function fitCanvas() {
     var dpr = window.devicePixelRatio || 1;
@@ -1885,7 +1894,6 @@ footer a { color: var(--foot); }
     var shown = L.countUpTo(state.events, state.t);
     var cur = shown ? state.events[shown - 1] : null;
     $('head').textContent = cur ? L.headline(cur) : '\u00a0';
-    $('headTime').textContent = cur ? L.fmtCt(cur._t) + (state.live ? '' : replay ? ' · replay' : ' · rewound') : '\u00a0';
     L.AGENTS.forEach(function (a) {
       var s = seatEls[a[0]], c = L.COLOR[a[0]], v = L.seatView(seatState(a[0], hot)), on = v.lit;
       if (!s) return;
@@ -1946,7 +1954,8 @@ footer a { color: var(--foot); }
     window.LIVE_HEADER_WORKING = [workingN, seatNames.length];
     var total = window.LIVE_FEED_TOTAL != null ? window.LIVE_FEED_TOTAL : state.events.length;
     var st = state.generatedAt ? 'Refreshed <b title="' + L.fmtCt(state.generatedAt) + '">' + L.ago(now - state.generatedAt) + '</b>' : 'Waiting for feed';
-    st += ' · ' + Number(total).toLocaleString('en-US') + ' events · ' + seenN + ' seen · ' + workingN + ' working';
+    st += ' · ' + Number(total).toLocaleString('en-US') + ' events';
+    if ($('meshCounts')) $('meshCounts').textContent = seenN + ' seen · ' + workingN + ' working';
     paintFresh(now);
     if (fetchError) st += ' · <span class="err">' + fetchError + '</span>';
     $('status').innerHTML = st;
@@ -2278,7 +2287,7 @@ footer a { color: var(--foot); }
   function foldSum(id, text) {
     var el = $(id); if (el) el.textContent = text;
   }
-  var FOLD_OPEN = { mesh: 1, stats: 1, roster: 1, cards: 1, kanban: 1, activity: 1 };
+  var FOLD_OPEN = { stats: 1, roster: 1, cards: 1, kanban: 1, activity: 1 };
   function applyFolds() {
     if (!document.querySelectorAll) return;
     var saved = foldSaved();
@@ -2346,6 +2355,7 @@ footer a { color: var(--foot); }
       var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
       root.setAttribute('data-theme', next);
       try { localStorage.setItem('bifrost-theme', next); } catch (e) {}
+      drawMark();
       paintSeatColors();
       L.AGENTS.forEach(function (a) {
         var nm = seatEls[a[0]] && seatEls[a[0]].el.querySelector('.nm');
